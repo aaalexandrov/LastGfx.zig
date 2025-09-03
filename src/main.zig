@@ -1,15 +1,22 @@
 const std = @import("std");
-const c = @cImport({
-    @cDefine("SDL_DISABLE_OLD_NAMES", {});
-    @cInclude("SDL3/SDL.h");
-});
+const c = @import("cimport.zig").c;
+const vk = @import("vk_gfx.zig");
 
 pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer if (gpa.deinit() == .leak) {
+        @panic("Leaked memory detected on exit!");
+    };
+
     try errify(c.SDL_Init(c.SDL_INIT_VIDEO));
     defer c.SDL_Quit();
 
-    const window = c.SDL_CreateWindow("LastGfx", 400, 300, c.SDL_WINDOW_RESIZABLE);
+    const window = c.SDL_CreateWindow("LastGfx", 400, 300, c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_VULKAN);
     defer c.SDL_DestroyWindow(window);
+
+    var gfx: vk.Gfx = undefined;
+    try gfx.init(gpa.allocator(), true);
+    defer gfx.deinit();
 
     var running = true;
     var event = std.mem.zeroes(c.SDL_Event);
