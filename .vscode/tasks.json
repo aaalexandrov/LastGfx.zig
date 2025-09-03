@@ -1,0 +1,49 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "shell",
+      "label": "zig build",
+      "command": "zig build",
+      "problemMatcher": [
+        "$zig"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "type": "shell",
+      "label": "zig build install",
+      "command": "zig build install",
+      "problemMatcher": [
+        "$zig"
+      ]
+    },
+    {
+      "type": "shell",
+      "label": "zig build uninstall",
+      "command": "zig build uninstall",
+      "problemMatcher": [
+        "$zig"
+      ]
+    },
+    {
+      "type": "shell",
+      "label": "zig build run",
+      "command": "zig build run",
+      "problemMatcher": [
+        "$zig"
+      ]
+    },
+    {
+      "type": "shell",
+      "label": "zig build test",
+      "command": "zig build test",
+      "problemMatcher": [
+        "$zig"
+      ]
+    }
+  ]
+}
