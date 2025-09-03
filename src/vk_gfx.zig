@@ -24,7 +24,7 @@ pub const Gfx = struct {
 
         var sdlExtCount: u32 = 0;
         const sdlExts = c.SDL_Vulkan_GetInstanceExtensions(&sdlExtCount);
-        for (0 .. sdlExtCount) |e| {
+        for (0..sdlExtCount) |e| {
             try exts.append(sdlExts[e]);
         }
 
