@@ -1,10 +1,32 @@
 const std = @import("std");
 const c = @import("cimport.zig").c;
 
+fn DebugCallback(severity: c.VkDebugUtilsMessageSeverityFlagBitsEXT, msgType: c.VkDebugUtilsMessageTypeFlagsEXT, cbData: [*c]const c.VkDebugUtilsMessengerCallbackDataEXT, userData: ?*anyopaque) callconv(.c) c.VkBool32 {
+    _ = userData;
+    const severityStr = switch (severity) {
+        c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT => "Verbose",
+        c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT => "Info",
+        c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT => "Warning",
+        c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT => "Error",
+        else => "Unimplemented",
+    };
+    const msgTypeStr = switch (msgType) {
+        c.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT => "General",
+        c.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT => "Validation",
+        c.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT => "Performance",
+        else => "Unimplemented",
+    };
+    const msg: [*c]const u8 = if (cbData != null) cbData.*.pMessage else "No Message";
+    std.log.info("[{s}][{s}] Msg: {s}\n", .{ severityStr, msgTypeStr, msg });
+    return c.VK_FALSE;
+}
+
 pub const Gfx = struct {
     alloc: std.mem.Allocator,
     allocCB: ?*c.VkAllocationCallbacks = null,
     instance: c.VkInstance = null,
+    dbgMessenger: c.VkDebugUtilsMessengerEXT = null,
+    physical: PhysicalDevice,
 
     pub const Self = @This();
 
@@ -15,10 +37,6 @@ pub const Gfx = struct {
         var layers = std.ArrayList([*c]const u8).init(self.alloc);
         defer layers.deinit();
 
-        if (debug) {
-            try layers.append("VK_LAYER_KHRONOS_validation");
-        }
-
         var exts = std.ArrayList([*c]const u8).init(self.alloc);
         defer exts.deinit();
 
@@ -28,8 +46,21 @@ pub const Gfx = struct {
             try exts.append(sdlExts[e]);
         }
 
+        var dbgMessengerInfo = c.VkDebugUtilsMessengerCreateInfoEXT{
+            .sType = c.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+            .messageSeverity = c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
+            .messageType = c.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | c.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | c.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
+            .pfnUserCallback = &DebugCallback,
+            .pUserData = self,
+        };
+        if (debug) {
+            try layers.append("VK_LAYER_KHRONOS_validation");
+            try exts.append(c.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        }
+
         const instInfo = c.VkInstanceCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+            .pNext = if (debug) &dbgMessengerInfo else null,
             .pApplicationInfo = &c.VkApplicationInfo{
                 .sType = c.VK_STRUCTURE_TYPE_APPLICATION_INFO,
                 .apiVersion = c.VK_API_VERSION_1_4,
@@ -41,10 +72,56 @@ pub const Gfx = struct {
             .ppEnabledExtensionNames = exts.items.ptr,
         };
         try check_vk(c.vkCreateInstance(&instInfo, self.allocCB, &self.instance));
+
+        self.dbgMessenger = null;
+        if (debug) {
+            const vkCreateDebugUtilsMessengerEXT = self.getInstanceProcAddress(c.PFN_vkCreateDebugUtilsMessengerEXT, "vkCreateDebugUtilsMessengerEXT");
+            if (vkCreateDebugUtilsMessengerEXT) |func| {
+                try check_vk(func(self.instance, &dbgMessengerInfo, self.allocCB, &self.dbgMessenger));
+            } else {
+                return error.function_not_found;
+            }
+        }
+
+        self.physical = try self.selectPhysicalDevice();
     }
 
     pub fn deinit(self: *Self) void {
+        if (self.dbgMessenger != null) {
+            const vkDestroyDebugUtilsMessengerEXT = self.getInstanceProcAddress(c.PFN_vkDestroyDebugUtilsMessengerEXT, "vkDestroyDebugUtilsMessengerEXT");
+            if (vkDestroyDebugUtilsMessengerEXT) |func|
+                func(self.instance, self.dbgMessenger, self.allocCB);
+        }
         c.vkDestroyInstance(self.instance, self.allocCB);
+    }
+
+    fn getInstanceProcAddress(self: *Self, comptime Fn: type, name: [*c]const u8) Fn {
+        return @ptrCast(c.vkGetInstanceProcAddr(self.instance, name));
+    }
+
+    pub const PhysicalDevice = struct {
+        handle: c.VkPhysicalDevice = null,
+        props: c.VkPhysicalDeviceProperties,
+    };
+
+    pub fn selectPhysicalDevice(self: *Self) !PhysicalDevice {
+        var numDevices: u32 = 0;
+        try check_vk(c.vkEnumeratePhysicalDevices(self.instance, &numDevices, null));
+
+        var devices = std.ArrayList(c.VkPhysicalDevice).init(self.alloc);
+        defer devices.deinit();
+        try devices.resize(numDevices);
+
+        try check_vk(c.vkEnumeratePhysicalDevices(self.instance, &numDevices, devices.items.ptr));
+
+        const deviceIndex: u32 = 0;
+        var devProps: c.VkPhysicalDeviceProperties = undefined;
+        c.vkGetPhysicalDeviceProperties(devices.items[deviceIndex], &devProps);
+
+        return PhysicalDevice{
+            .handle = devices.items[0],
+            .props = devProps,
+        };
     }
 };
 
