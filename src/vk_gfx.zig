@@ -28,6 +28,7 @@ pub const Gfx = struct {
     dbgMessenger: c.VkDebugUtilsMessengerEXT = null,
     physical: PhysicalDevice,
 
+    pub const API_VERSION = c.VK_API_VERSION_1_4;
     pub const Self = @This();
 
     pub fn init(self: *Self, allocator: std.mem.Allocator, debug: bool) !void {
@@ -63,7 +64,7 @@ pub const Gfx = struct {
             .pNext = if (debug) &dbgMessengerInfo else null,
             .pApplicationInfo = &c.VkApplicationInfo{
                 .sType = c.VK_STRUCTURE_TYPE_APPLICATION_INFO,
-                .apiVersion = c.VK_API_VERSION_1_4,
+                .apiVersion = API_VERSION,
                 .pEngineName = "LastGfx",
             },
             .enabledLayerCount = @intCast(layers.items.len),
@@ -84,6 +85,13 @@ pub const Gfx = struct {
         }
 
         self.physical = try self.selectPhysicalDevice();
+        std.log.info("GPU: {s}, Vulkan ver.{}.{}.{}.{}\n", .{
+            self.physical.props.deviceName,
+            c.VK_API_VERSION_VARIANT(self.physical.props.apiVersion),
+            c.VK_API_VERSION_MAJOR(self.physical.props.apiVersion),
+            c.VK_API_VERSION_MINOR(self.physical.props.apiVersion),
+            c.VK_API_VERSION_PATCH(self.physical.props.apiVersion),
+        });
     }
 
     pub fn deinit(self: *Self) void {
@@ -102,6 +110,31 @@ pub const Gfx = struct {
     pub const PhysicalDevice = struct {
         handle: c.VkPhysicalDevice = null,
         props: c.VkPhysicalDeviceProperties,
+        universalQueueFamily: i32 = -1,
+
+        fn init(instance: c.VkInstance, physDev: c.VkPhysicalDevice, alloc: std.mem.Allocator) PhysicalDevice {
+            var phys: PhysicalDevice = undefined;
+            phys.handle = physDev;
+            c.vkGetPhysicalDeviceProperties(physDev, &phys.props);
+            phys.universalQueueFamily = -1;
+
+            var numQueueFamilies: u32 = 0;
+            c.vkGetPhysicalDeviceQueueFamilyProperties(physDev, &numQueueFamilies, null);
+            var queues = std.ArrayList(c.VkQueueFamilyProperties).init(alloc);
+            defer queues.deinit();
+            queues.resize(numQueueFamilies) catch @panic("OOM");
+            c.vkGetPhysicalDeviceQueueFamilyProperties(physDev, &numQueueFamilies, queues.items.ptr);
+            const universalMask = c.VK_QUEUE_GRAPHICS_BIT | c.VK_QUEUE_COMPUTE_BIT | c.VK_QUEUE_TRANSFER_BIT;
+            for (queues.items, 0..) |familyProps, familyIndex| {
+                const canPresent = c.SDL_Vulkan_GetPresentationSupport(instance, physDev, @intCast(familyIndex));
+                if ((familyProps.queueFlags & universalMask) == universalMask and canPresent) {
+                    phys.universalQueueFamily = @intCast(familyIndex);
+                    break;
+                }
+            }
+
+            return phys;
+        }
     };
 
     pub fn selectPhysicalDevice(self: *Self) !PhysicalDevice {
@@ -114,16 +147,35 @@ pub const Gfx = struct {
 
         try check_vk(c.vkEnumeratePhysicalDevices(self.instance, &numDevices, devices.items.ptr));
 
-        const deviceIndex: u32 = 0;
-        var devProps: c.VkPhysicalDeviceProperties = undefined;
-        c.vkGetPhysicalDeviceProperties(devices.items[deviceIndex], &devProps);
+        var bestProps: ?PhysicalDevice = null;
 
-        return PhysicalDevice{
-            .handle = devices.items[0],
-            .props = devProps,
-        };
+        for (devices.items) |device| {
+            const devProps = PhysicalDevice.init(self.instance, device, self.alloc);
+            if (devProps.props.apiVersion < API_VERSION)
+                continue;
+            if (devProps.universalQueueFamily < 0)
+                continue;
+            if (bestProps) |best| {
+                if ((try deviceTypePriority(devProps.props.deviceType)) <= (try deviceTypePriority(best.props.deviceType)))
+                    continue;
+            }
+            bestProps = devProps;
+        }
+
+        return bestProps.?;
     }
 };
+
+fn deviceTypePriority(t: c.VkPhysicalDeviceType) !i32 {
+    return switch (t) {
+        c.VK_PHYSICAL_DEVICE_TYPE_CPU => 0,
+        c.VK_PHYSICAL_DEVICE_TYPE_OTHER => 1,
+        c.VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU => 2,
+        c.VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU => 3,
+        c.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU => 4,
+        else => error.unknown_physical_device_type,
+    };
+}
 
 pub fn check_vk(result: c.VkResult) !void {
     return switch (result) {
