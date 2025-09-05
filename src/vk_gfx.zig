@@ -27,6 +27,7 @@ pub const Gfx = struct {
     instance: c.VkInstance = null,
     dbgMessenger: c.VkDebugUtilsMessengerEXT = null,
     physical: PhysicalDevice,
+    device: Device,
 
     pub const API_VERSION = c.VK_API_VERSION_1_4;
     pub const Self = @This();
@@ -92,14 +93,19 @@ pub const Gfx = struct {
             c.VK_API_VERSION_MINOR(self.physical.props.apiVersion),
             c.VK_API_VERSION_PATCH(self.physical.props.apiVersion),
         });
+
+        self.device = try self.createDevice();
     }
 
     pub fn deinit(self: *Self) void {
+        c.vkDestroyDevice(self.device.handle, self.allocCB);
+
         if (self.dbgMessenger != null) {
             const vkDestroyDebugUtilsMessengerEXT = self.getInstanceProcAddress(c.PFN_vkDestroyDebugUtilsMessengerEXT, "vkDestroyDebugUtilsMessengerEXT");
             if (vkDestroyDebugUtilsMessengerEXT) |func|
                 func(self.instance, self.dbgMessenger, self.allocCB);
         }
+
         c.vkDestroyInstance(self.instance, self.allocCB);
     }
 
@@ -107,37 +113,7 @@ pub const Gfx = struct {
         return @ptrCast(c.vkGetInstanceProcAddr(self.instance, name));
     }
 
-    pub const PhysicalDevice = struct {
-        handle: c.VkPhysicalDevice = null,
-        props: c.VkPhysicalDeviceProperties,
-        universalQueueFamily: i32 = -1,
-
-        fn init(instance: c.VkInstance, physDev: c.VkPhysicalDevice, alloc: std.mem.Allocator) PhysicalDevice {
-            var phys: PhysicalDevice = undefined;
-            phys.handle = physDev;
-            c.vkGetPhysicalDeviceProperties(physDev, &phys.props);
-            phys.universalQueueFamily = -1;
-
-            var numQueueFamilies: u32 = 0;
-            c.vkGetPhysicalDeviceQueueFamilyProperties(physDev, &numQueueFamilies, null);
-            var queues = std.ArrayList(c.VkQueueFamilyProperties).init(alloc);
-            defer queues.deinit();
-            queues.resize(numQueueFamilies) catch @panic("OOM");
-            c.vkGetPhysicalDeviceQueueFamilyProperties(physDev, &numQueueFamilies, queues.items.ptr);
-            const universalMask = c.VK_QUEUE_GRAPHICS_BIT | c.VK_QUEUE_COMPUTE_BIT | c.VK_QUEUE_TRANSFER_BIT;
-            for (queues.items, 0..) |familyProps, familyIndex| {
-                const canPresent = c.SDL_Vulkan_GetPresentationSupport(instance, physDev, @intCast(familyIndex));
-                if ((familyProps.queueFlags & universalMask) == universalMask and canPresent) {
-                    phys.universalQueueFamily = @intCast(familyIndex);
-                    break;
-                }
-            }
-
-            return phys;
-        }
-    };
-
-    pub fn selectPhysicalDevice(self: *Self) !PhysicalDevice {
+    fn selectPhysicalDevice(self: *Self) !PhysicalDevice {
         var numDevices: u32 = 0;
         try check_vk(c.vkEnumeratePhysicalDevices(self.instance, &numDevices, null));
 
@@ -163,6 +139,106 @@ pub const Gfx = struct {
         }
 
         return bestProps.?;
+    }
+
+    fn createDevice(self: *Self) !Device {
+        var device: Device = undefined;
+        const exts = [_][*c]const u8{
+            "VK_KHR_swapchain",
+        };
+        try check_vk(c.vkCreateDevice(self.physical.handle, &c.VkDeviceCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+            .queueCreateInfoCount = 1,
+            .pQueueCreateInfos = &c.VkDeviceQueueCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                .queueFamilyIndex = @intCast(self.physical.universalQueueFamily),
+                .queueCount = 1,
+                .pQueuePriorities = &[_]f32{0},
+            },
+            .enabledExtensionCount = @intCast(exts.len),
+            .ppEnabledExtensionNames = &exts,
+        }, self.allocCB, &device.handle));
+        c.vkGetDeviceQueue(device.handle, @intCast(self.physical.universalQueueFamily), 0, &device.universalQueue);
+        std.debug.assert(device.universalQueue != null);
+        return device;
+    }
+};
+
+pub const PhysicalDevice = struct {
+    handle: c.VkPhysicalDevice = null,
+    props: c.VkPhysicalDeviceProperties,
+    universalQueueFamily: i32 = -1,
+
+    fn init(instance: c.VkInstance, physDev: c.VkPhysicalDevice, alloc: std.mem.Allocator) PhysicalDevice {
+        var phys: PhysicalDevice = undefined;
+        phys.handle = physDev;
+        c.vkGetPhysicalDeviceProperties(physDev, &phys.props);
+        phys.universalQueueFamily = -1;
+
+        var numQueueFamilies: u32 = 0;
+        c.vkGetPhysicalDeviceQueueFamilyProperties(physDev, &numQueueFamilies, null);
+        var queues = std.ArrayList(c.VkQueueFamilyProperties).init(alloc);
+        defer queues.deinit();
+        queues.resize(numQueueFamilies) catch @panic("OOM");
+        c.vkGetPhysicalDeviceQueueFamilyProperties(physDev, &numQueueFamilies, queues.items.ptr);
+        const universalMask = c.VK_QUEUE_GRAPHICS_BIT | c.VK_QUEUE_COMPUTE_BIT | c.VK_QUEUE_TRANSFER_BIT;
+        for (queues.items, 0..) |familyProps, familyIndex| {
+            const canPresent = c.SDL_Vulkan_GetPresentationSupport(instance, physDev, @intCast(familyIndex));
+            if ((familyProps.queueFlags & universalMask) == universalMask and canPresent) {
+                phys.universalQueueFamily = @intCast(familyIndex);
+                break;
+            }
+        }
+
+        return phys;
+    }
+};
+
+pub const Device = struct {
+    handle: c.VkDevice,
+    universalQueue: c.VkQueue,
+};
+
+pub const Swapchain = struct {
+    handle: c.VkSwapchainKHR = null,
+    surface: c.VkSurfaceKHR = null,
+
+    pub const Self = @This();
+
+    pub fn init(gfx: *Gfx, window: ?*c.SDL_Window) !Swapchain {
+        var swap: Swapchain = undefined;
+        if (!c.SDL_Vulkan_CreateSurface(window, gfx.instance, gfx.allocCB, &swap.surface))
+            unreachable;
+
+        var surfaceCaps: c.VkSurfaceCapabilitiesKHR = undefined;
+        try check_vk(c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(gfx.physical.handle, swap.surface, &surfaceCaps));
+
+        if (surfaceCaps.currentExtent.width > surfaceCaps.maxImageExtent.width or surfaceCaps.currentExtent.height > surfaceCaps.maxImageExtent.height)
+            _ = c.SDL_GetWindowSize(window, @ptrCast(&surfaceCaps.currentExtent.width), @ptrCast(&surfaceCaps.currentExtent.height));
+
+        try check_vk(c.vkCreateSwapchainKHR(gfx.device.handle, &c.VkSwapchainCreateInfoKHR{
+            .sType = c.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+            .surface = swap.surface,
+            .queueFamilyIndexCount = 1,
+            .pQueueFamilyIndices = &[_]u32{@intCast(gfx.physical.universalQueueFamily)},
+            .presentMode = c.VK_PRESENT_MODE_FIFO_KHR,
+            .imageFormat = c.VK_FORMAT_B8G8R8A8_SRGB,
+            .imageColorSpace = c.VK_COLORSPACE_SRGB_NONLINEAR_KHR,
+            .imageExtent = surfaceCaps.currentExtent,
+            .imageArrayLayers = 1,
+            .imageUsage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | c.VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            .minImageCount = surfaceCaps.minImageCount,
+            .preTransform = surfaceCaps.currentTransform,
+            .compositeAlpha = c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+        }, gfx.allocCB, &swap.handle));
+
+        return swap;
+    }
+
+    pub fn deinit(self: *Self, gfx: *Gfx) void {
+        c.vkDestroySwapchainKHR(gfx.device.handle, self.handle, gfx.allocCB);
+        c.SDL_Vulkan_DestroySurface(gfx.instance, self.surface, gfx.allocCB);
+        //c.vkDestroySurfaceKHR(gfx.instance, self.surface, gfx.allocCB);
     }
 };
 

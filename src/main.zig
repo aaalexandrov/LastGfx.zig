@@ -18,6 +18,9 @@ pub fn main() !void {
     try gfx.init(gpa.allocator(), true);
     defer gfx.deinit();
 
+    var swapchain = try vk.Swapchain.init(&gfx, window);
+    defer swapchain.deinit(&gfx);
+
     var running = true;
     var event = std.mem.zeroes(c.SDL_Event);
     while (running) {
@@ -30,9 +33,9 @@ pub fn main() !void {
             }
         }
 
-        const surf = try errify(c.SDL_GetWindowSurface(window));
-        try errify(c.SDL_FillSurfaceRect(surf, null, c.SDL_MapSurfaceRGB(surf, 0x5F, 0x5F, 0x5F)));
-        try errify(c.SDL_UpdateWindowSurface(window));
+        // const surf = try errify(c.SDL_GetWindowSurface(window));
+        // try errify(c.SDL_FillSurfaceRect(surf, null, c.SDL_MapSurfaceRGB(surf, 0x5F, 0x5F, 0x5F)));
+        //try errify(c.SDL_UpdateWindowSurface(window));
     }
 }
 
