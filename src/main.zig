@@ -38,7 +38,7 @@ pub fn main() !void {
 
         const swapImage = try swapchain.acquireNextImage();
 
-        try vk.check_vk(c.vkResetFences(gfx.device.handle, 1, &cmds.fence));
+        try vk.check(c.vkResetFences(gfx.device.handle, 1, &cmds.fence));
 
         try cmds.begin();
 
@@ -94,7 +94,7 @@ pub fn main() !void {
 
         try swapchain.present(swapImage.image, null);
 
-        try vk.check_vk(c.vkDeviceWaitIdle(gfx.device.handle));
+        try gfx.waitIdle();
     }
 }
 

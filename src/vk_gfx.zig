@@ -73,13 +73,13 @@ pub const Gfx = struct {
             .enabledExtensionCount = @intCast(exts.items.len),
             .ppEnabledExtensionNames = exts.items.ptr,
         };
-        try check_vk(c.vkCreateInstance(&instInfo, self.allocCB, &self.instance));
+        try check(c.vkCreateInstance(&instInfo, self.allocCB, &self.instance));
 
         self.dbgMessenger = null;
         if (debug) {
             const vkCreateDebugUtilsMessengerEXT = self.getInstanceProcAddress(c.PFN_vkCreateDebugUtilsMessengerEXT, "vkCreateDebugUtilsMessengerEXT");
             if (vkCreateDebugUtilsMessengerEXT) |func| {
-                try check_vk(func(self.instance, &dbgMessengerInfo, self.allocCB, &self.dbgMessenger));
+                try check(func(self.instance, &dbgMessengerInfo, self.allocCB, &self.dbgMessenger));
             } else {
                 return error.function_not_found;
             }
@@ -115,13 +115,13 @@ pub const Gfx = struct {
 
     fn selectPhysicalDevice(self: *Self) !PhysicalDevice {
         var numDevices: u32 = 0;
-        try check_vk(c.vkEnumeratePhysicalDevices(self.instance, &numDevices, null));
+        try check(c.vkEnumeratePhysicalDevices(self.instance, &numDevices, null));
 
         var devices = std.ArrayList(c.VkPhysicalDevice).init(self.alloc);
         defer devices.deinit();
         try devices.resize(numDevices);
 
-        try check_vk(c.vkEnumeratePhysicalDevices(self.instance, &numDevices, devices.items.ptr));
+        try check(c.vkEnumeratePhysicalDevices(self.instance, &numDevices, devices.items.ptr));
 
         var bestProps: ?PhysicalDevice = null;
 
@@ -146,7 +146,7 @@ pub const Gfx = struct {
         const exts = [_][*c]const u8{
             c.VK_KHR_SWAPCHAIN_EXTENSION_NAME,
         };
-        try check_vk(c.vkCreateDevice(self.physical.handle, &c.VkDeviceCreateInfo{
+        try check(c.vkCreateDevice(self.physical.handle, &c.VkDeviceCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
             .pNext = &c.VkPhysicalDeviceSynchronization2Features{
                 .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES,
@@ -182,7 +182,7 @@ pub const Gfx = struct {
     };
     fn createImageView(self: *Self, opts: ImageViewOpts) !c.VkImageView {
             var view: c.VkImageView = null;
-            try check_vk(c.vkCreateImageView(
+            try check(c.vkCreateImageView(
                 self.device.handle, 
                 &c.VkImageViewCreateInfo{
                     .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -197,6 +197,10 @@ pub const Gfx = struct {
                 &view
             ));
             return view;
+    }
+
+    pub fn waitIdle(self: *Self) !void {
+        try check(c.vkDeviceWaitIdle(self.device.handle));
     }
 };
 
@@ -245,7 +249,7 @@ pub const Commands = struct {
     pub const Self = @This();
     pub fn init(gfx: *Gfx) !Self {
         var self: Self = .{.gfx = gfx};
-        try check_vk(c.vkCreateCommandPool(
+        try check(c.vkCreateCommandPool(
             gfx.device.handle, 
             &c.VkCommandPoolCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -255,7 +259,7 @@ pub const Commands = struct {
             gfx.allocCB, 
             &self.pool
         ));
-        try check_vk(c.vkAllocateCommandBuffers(
+        try check(c.vkAllocateCommandBuffers(
             gfx.device.handle, 
             &c.VkCommandBufferAllocateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -265,7 +269,7 @@ pub const Commands = struct {
             }, 
             &self.handle
         ));
-        try check_vk(c.vkCreateFence(
+        try check(c.vkCreateFence(
             gfx.device.handle, 
             &c.VkFenceCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
@@ -284,7 +288,7 @@ pub const Commands = struct {
     }
 
     pub fn begin(self: *Self) !void {
-        try check_vk(c.vkBeginCommandBuffer(
+        try check(c.vkBeginCommandBuffer(
             self.handle, 
             &c.VkCommandBufferBeginInfo{
                 .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -294,11 +298,11 @@ pub const Commands = struct {
     }
 
     pub fn end(self: *Self) !void {
-        try check_vk(c.vkEndCommandBuffer(self.handle));
+        try check(c.vkEndCommandBuffer(self.handle));
     }
 
     pub fn submit(self: *Self, waitSemaphore: c.VkSemaphore) !void {
-        try check_vk(c.vkQueueSubmit2(
+        try check(c.vkQueueSubmit2(
             self.gfx.device.universalQueue,
             1, 
             &c.VkSubmitInfo2{
@@ -336,7 +340,7 @@ pub const Swapchain = struct {
             unreachable;
 
         var surfaceCaps: c.VkSurfaceCapabilitiesKHR = undefined;
-        try check_vk(c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(gfx.physical.handle, self.surface, &surfaceCaps));
+        try check(c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(gfx.physical.handle, self.surface, &surfaceCaps));
 
         if (surfaceCaps.currentExtent.width > surfaceCaps.maxImageExtent.width or surfaceCaps.currentExtent.height > surfaceCaps.maxImageExtent.height)
             _ = c.SDL_GetWindowSize(window, @ptrCast(&surfaceCaps.currentExtent.width), @ptrCast(&surfaceCaps.currentExtent.height));
@@ -357,19 +361,19 @@ pub const Swapchain = struct {
             .preTransform = surfaceCaps.currentTransform,
             .compositeAlpha = c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
         };
-        try check_vk(c.vkCreateSwapchainKHR(gfx.device.handle, &swapchainInfo, gfx.allocCB, &self.handle));
+        try check(c.vkCreateSwapchainKHR(gfx.device.handle, &swapchainInfo, gfx.allocCB, &self.handle));
 
         var numImages: u32 = 0;
-        try check_vk(c.vkGetSwapchainImagesKHR(gfx.device.handle, self.handle, &numImages, null));
+        try check(c.vkGetSwapchainImagesKHR(gfx.device.handle, self.handle, &numImages, null));
         const images = try gfx.alloc.alloc(c.VkImage, numImages);
         defer gfx.alloc.free(images);
-        try check_vk(c.vkGetSwapchainImagesKHR(gfx.device.handle, self.handle, &numImages, images.ptr));
+        try check(c.vkGetSwapchainImagesKHR(gfx.device.handle, self.handle, &numImages, images.ptr));
         self.images = try gfx.alloc.alloc(Image, numImages);
         self.semaphores = try gfx.alloc.alloc(c.VkSemaphore, numImages);
         for (images, 0..) |img, i| {
             const view = try gfx.createImageView(.{.image = img, .format = swapchainInfo.imageFormat});
             self.images[i] = try Image.init(gfx, img, view, false);
-            try check_vk(c.vkCreateSemaphore(
+            try check(c.vkCreateSemaphore(
                 gfx.device.handle, 
                 &c.VkSemaphoreCreateInfo{
                     .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
@@ -396,7 +400,7 @@ pub const Swapchain = struct {
     pub fn acquireNextImage(self: *Self) !struct { image: *Image, semaphore: c.VkSemaphore } {
         self.semaphoreIndex = @rem(self.semaphoreIndex + 1, @as(u32, @intCast(self.semaphores.len)));
         var imgIndex: u32 = 0;
-        try check_vk(c.vkAcquireNextImage2KHR(
+        try check(c.vkAcquireNextImage2KHR(
             self.gfx.device.handle, 
             &c.VkAcquireNextImageInfoKHR{
                 .sType = c.VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR,
@@ -412,7 +416,7 @@ pub const Swapchain = struct {
 
     pub fn present(self: *Self, image: *Image, waitSemaphore: c.VkSemaphore) !void {
         const imgIndex = image - self.images.ptr;
-        try check_vk(c.vkQueuePresentKHR(
+        try check(c.vkQueuePresentKHR(
             self.gfx.device.universalQueue,
             &c.VkPresentInfoKHR{
                 .sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
@@ -472,7 +476,7 @@ pub fn wholeImage(aspectMask: c.VkImageAspectFlags) c.VkImageSubresourceRange {
     };
 }
 
-pub fn check_vk(result: c.VkResult) !void {
+pub fn check(result: c.VkResult) !void {
     return switch (result) {
         c.VK_SUCCESS => {},
         c.VK_NOT_READY => error.vk_not_ready,
