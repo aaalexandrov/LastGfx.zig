@@ -162,6 +162,44 @@ pub const Gfx = struct {
         std.debug.assert(device.universalQueue != null);
         return device;
     }
+
+    const ImageViewOpts = struct {
+        image: c.VkImage,
+        format: c.VkFormat,
+        flags: c.VkImageViewCreateFlags = 0,
+        viewType: c.VkImageViewType = c.VK_IMAGE_VIEW_TYPE_2D,
+        components: c.VkComponentMapping = .{
+            .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+            .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+            .b = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+            .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+        },
+        subresourceRange: c.VkImageSubresourceRange = .{
+            .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseArrayLayer = 0,
+            .layerCount = c.VK_REMAINING_ARRAY_LAYERS,
+            .baseMipLevel = 0,
+            .levelCount = c.VK_REMAINING_MIP_LEVELS,
+        },
+    };
+    fn createImageView(self: *Self, opts: ImageViewOpts) !c.VkImageView {
+            var view: c.VkImageView = null;
+            try check_vk(c.vkCreateImageView(
+                self.device.handle, 
+                &c.VkImageViewCreateInfo{
+                    .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                    .flags = opts.flags,
+                    .image = opts.image,
+                    .viewType = opts.viewType,
+                    .format = opts.format,
+                    .components = opts.components,
+                    .subresourceRange = opts.subresourceRange,
+                }, 
+                self.allocCB, 
+                &view
+            ));
+            return view;
+    }
 };
 
 pub const PhysicalDevice = struct {
@@ -169,7 +207,8 @@ pub const PhysicalDevice = struct {
     props: c.VkPhysicalDeviceProperties,
     universalQueueFamily: i32 = -1,
 
-    fn init(instance: c.VkInstance, physDev: c.VkPhysicalDevice, alloc: std.mem.Allocator) PhysicalDevice {
+    pub const Self = @This();
+    fn init(instance: c.VkInstance, physDev: c.VkPhysicalDevice, alloc: std.mem.Allocator) Self {
         var phys: PhysicalDevice = undefined;
         phys.handle = physDev;
         c.vkGetPhysicalDeviceProperties(physDev, &phys.props);
@@ -199,26 +238,103 @@ pub const Device = struct {
     universalQueue: c.VkQueue,
 };
 
+pub const Commands = struct {
+    handle: c.VkCommandBuffer = null,
+    pool: c.VkCommandPool = null,
+    fence: c.VkFence = null,
+    gfx: *Gfx,
+
+    pub const Self = @This();
+    pub fn init(gfx: *Gfx) !Self {
+        var self: Self = .{.gfx = gfx};
+        try check_vk(c.vkCreateCommandPool(
+            gfx.device.handle, 
+            &c.VkCommandPoolCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+                .flags = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+                .queueFamilyIndex = @intCast(gfx.physical.universalQueueFamily),
+            }, 
+            gfx.allocCB, 
+            &self.pool
+        ));
+        try check_vk(c.vkAllocateCommandBuffers(
+            gfx.device.handle, 
+            &c.VkCommandBufferAllocateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                .commandPool = self.pool,
+                .commandBufferCount = 1,
+                .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            }, 
+            &self.handle
+        ));
+        try check_vk(c.vkCreateFence(
+            gfx.device.handle, 
+            &c.VkFenceCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+                .flags = 0,
+            }, 
+            gfx.allocCB, 
+            &self.fence
+        ));
+        return self;
+    }
+
+    pub fn deinit(self: *Self) void {
+        c.vkDestroyFence(self.gfx.device.handle, self.fence, self.gfx.allocCB);
+        c.vkFreeCommandBuffers(self.gfx.device.handle, self.pool, 1, &self.handle);
+        c.vkDestroyCommandPool(self.gfx.device.handle, self.pool, self.gfx.allocCB);
+    }
+
+    pub fn begin(self: *Self) !void {
+        try check_vk(c.vkBeginCommandBuffer(
+            self.handle, 
+            &c.VkCommandBufferBeginInfo{
+                .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                .flags = 0,
+            }
+        ));
+    }
+
+    pub fn end(self: *Self) !void {
+        try check_vk(c.vkEndCommandBuffer(self.handle));
+    }
+
+    pub fn submit(self: *Self) !void {
+        try check_vk(c.vkQueueSubmit2(
+            self.gfx.device.universalQueue,
+            1, 
+            &c.VkSubmitInfo2{
+                .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+            },
+            self.fence
+        ));
+    }
+};
+
 pub const Swapchain = struct {
     handle: c.VkSwapchainKHR = null,
     surface: c.VkSurfaceKHR = null,
+    images: []Image = &.{},
+    semaphores: []c.VkSemaphore = &.{},
+    semaphoreIndex: u32 = 0,
+    gfx: *Gfx,
 
     pub const Self = @This();
 
-    pub fn init(gfx: *Gfx, window: ?*c.SDL_Window) !Swapchain {
-        var swap: Swapchain = undefined;
-        if (!c.SDL_Vulkan_CreateSurface(window, gfx.instance, gfx.allocCB, &swap.surface))
+    pub fn init(gfx: *Gfx, window: ?*c.SDL_Window) !Self {
+        var self: Self = .{.gfx = gfx};
+        if (!c.SDL_Vulkan_CreateSurface(window, gfx.instance, gfx.allocCB, &self.surface))
             unreachable;
 
         var surfaceCaps: c.VkSurfaceCapabilitiesKHR = undefined;
-        try check_vk(c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(gfx.physical.handle, swap.surface, &surfaceCaps));
+        try check_vk(c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(gfx.physical.handle, self.surface, &surfaceCaps));
 
         if (surfaceCaps.currentExtent.width > surfaceCaps.maxImageExtent.width or surfaceCaps.currentExtent.height > surfaceCaps.maxImageExtent.height)
             _ = c.SDL_GetWindowSize(window, @ptrCast(&surfaceCaps.currentExtent.width), @ptrCast(&surfaceCaps.currentExtent.height));
 
-        try check_vk(c.vkCreateSwapchainKHR(gfx.device.handle, &c.VkSwapchainCreateInfoKHR{
+        const swapchainInfo =c.VkSwapchainCreateInfoKHR{
             .sType = c.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
-            .surface = swap.surface,
+            .surface = self.surface,
             .queueFamilyIndexCount = 1,
             .pQueueFamilyIndices = &[_]u32{@intCast(gfx.physical.universalQueueFamily)},
             .presentMode = c.VK_PRESENT_MODE_FIFO_KHR,
@@ -226,19 +342,101 @@ pub const Swapchain = struct {
             .imageColorSpace = c.VK_COLORSPACE_SRGB_NONLINEAR_KHR,
             .imageExtent = surfaceCaps.currentExtent,
             .imageArrayLayers = 1,
-            .imageUsage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | c.VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            .imageUsage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | c.VK_IMAGE_USAGE_SAMPLED_BIT | c.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | c.VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            .imageSharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
             .minImageCount = surfaceCaps.minImageCount,
             .preTransform = surfaceCaps.currentTransform,
             .compositeAlpha = c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-        }, gfx.allocCB, &swap.handle));
+        };
+        try check_vk(c.vkCreateSwapchainKHR(gfx.device.handle, &swapchainInfo, gfx.allocCB, &self.handle));
 
-        return swap;
+        var numImages: u32 = 0;
+        try check_vk(c.vkGetSwapchainImagesKHR(gfx.device.handle, self.handle, &numImages, null));
+        const images = try gfx.alloc.alloc(c.VkImage, numImages);
+        defer gfx.alloc.free(images);
+        try check_vk(c.vkGetSwapchainImagesKHR(gfx.device.handle, self.handle, &numImages, images.ptr));
+        self.images = try gfx.alloc.alloc(Image, numImages);
+        self.semaphores = try gfx.alloc.alloc(c.VkSemaphore, numImages);
+        for (images, 0..) |img, i| {
+            const view = try gfx.createImageView(.{.image = img, .format = swapchainInfo.imageFormat});
+            self.images[i] = try Image.init(gfx, img, view, false);
+            try check_vk(c.vkCreateSemaphore(
+                gfx.device.handle, 
+                &c.VkSemaphoreCreateInfo{
+                    .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+                }, 
+                gfx.allocCB, 
+                &self.semaphores[i]
+            ));
+        }
+
+        return self;
     }
 
-    pub fn deinit(self: *Self, gfx: *Gfx) void {
-        c.vkDestroySwapchainKHR(gfx.device.handle, self.handle, gfx.allocCB);
-        c.SDL_Vulkan_DestroySurface(gfx.instance, self.surface, gfx.allocCB);
-        //c.vkDestroySurfaceKHR(gfx.instance, self.surface, gfx.allocCB);
+    pub fn deinit(self: *Self) void {
+        for (self.images, self.semaphores) |*img, sem| {
+            img.deinit();
+            c.vkDestroySemaphore(self.gfx.device.handle, sem, self.gfx.allocCB);
+        }
+        self.gfx.alloc.free(self.images);
+        self.gfx.alloc.free(self.semaphores);
+        c.vkDestroySwapchainKHR(self.gfx.device.handle, self.handle, self.gfx.allocCB);
+        c.SDL_Vulkan_DestroySurface(self.gfx.instance, self.surface, self.gfx.allocCB);
+    }
+
+    pub fn acquireNextImage(self: *Self) !struct { image: *Image, semaphore: c.VkSemaphore } {
+        self.semaphoreIndex = @rem(self.semaphoreIndex + 1, @as(u32, @intCast(self.semaphores.len)));
+        var imgIndex: u32 = 0;
+        try check_vk(c.vkAcquireNextImage2KHR(
+            self.gfx.device.handle, 
+            &c.VkAcquireNextImageInfoKHR{
+                .sType = c.VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR,
+                .swapchain = self.handle,
+                .deviceMask = 1,
+                .timeout = std.math.maxInt(u64),
+                .semaphore = self.semaphores[self.semaphoreIndex],
+            }, 
+            &imgIndex
+        ));
+        return .{.image = &self.images[imgIndex], .semaphore = self.semaphores[self.semaphoreIndex]};
+    }
+
+    pub fn present(self: *Self, image: *Image) !void {
+        const imgIndex = image - self.images.ptr;
+        try check_vk(c.vkQueuePresentKHR(
+            self.gfx.device.universalQueue,
+            &c.VkPresentInfoKHR{
+                .sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+                .swapchainCount = 1,
+                .pSwapchains = &self.handle,
+                .pImageIndices = @ptrCast(&imgIndex),
+            }
+        ));
+    }
+};
+
+pub const Image = struct {
+    handle: c.VkImage = null,
+    view: c.VkImageView = null,
+    ownImage: bool = true,
+    gfx: *Gfx,
+
+    pub const Self = @This();
+    pub fn init(gfx: *Gfx, image: c.VkImage, view: c.VkImageView, ownImage: bool) !Image {
+        const img: Image = .{
+            .handle = image,
+            .view = view,
+            .ownImage = ownImage,
+            .gfx = gfx,
+        };
+
+        return img;
+    }
+
+    pub fn deinit(self: *Self) void {
+        c.vkDestroyImageView(self.gfx.device.handle, self.view, self.gfx.allocCB);
+        if (self.ownImage)
+            c.vkDestroyImage(self.gfx.device.handle, self.handle, self.gfx.allocCB);
     }
 };
 
