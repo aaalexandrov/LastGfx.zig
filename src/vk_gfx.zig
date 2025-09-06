@@ -144,10 +144,14 @@ pub const Gfx = struct {
     fn createDevice(self: *Self) !Device {
         var device: Device = undefined;
         const exts = [_][*c]const u8{
-            "VK_KHR_swapchain",
+            c.VK_KHR_SWAPCHAIN_EXTENSION_NAME,
         };
         try check_vk(c.vkCreateDevice(self.physical.handle, &c.VkDeviceCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+            .pNext = &c.VkPhysicalDeviceSynchronization2Features{
+                .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES,
+                .synchronization2 = c.VK_TRUE,
+            },
             .queueCreateInfoCount = 1,
             .pQueueCreateInfos = &c.VkDeviceQueueCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -174,13 +178,7 @@ pub const Gfx = struct {
             .b = c.VK_COMPONENT_SWIZZLE_IDENTITY,
             .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
         },
-        subresourceRange: c.VkImageSubresourceRange = .{
-            .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseArrayLayer = 0,
-            .layerCount = c.VK_REMAINING_ARRAY_LAYERS,
-            .baseMipLevel = 0,
-            .levelCount = c.VK_REMAINING_MIP_LEVELS,
-        },
+        subresourceRange: c.VkImageSubresourceRange = wholeImage(c.VK_IMAGE_ASPECT_COLOR_BIT),
     };
     fn createImageView(self: *Self, opts: ImageViewOpts) !c.VkImageView {
             var view: c.VkImageView = null;
@@ -299,14 +297,25 @@ pub const Commands = struct {
         try check_vk(c.vkEndCommandBuffer(self.handle));
     }
 
-    pub fn submit(self: *Self) !void {
+    pub fn submit(self: *Self, waitSemaphore: c.VkSemaphore) !void {
         try check_vk(c.vkQueueSubmit2(
             self.gfx.device.universalQueue,
             1, 
             &c.VkSubmitInfo2{
                 .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+                .waitSemaphoreInfoCount = @intFromBool(waitSemaphore != null),
+                .pWaitSemaphoreInfos = &c.VkSemaphoreSubmitInfo{
+                    .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                    .semaphore = waitSemaphore,
+                    .stageMask = c.VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
+                },
+                .commandBufferInfoCount = 1,
+                .pCommandBufferInfos = &c.VkCommandBufferSubmitInfo{
+                    .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+                    .commandBuffer = self.handle,
+                },
             },
-            self.fence
+            self.fence,
         ));
     }
 };
@@ -401,7 +410,7 @@ pub const Swapchain = struct {
         return .{.image = &self.images[imgIndex], .semaphore = self.semaphores[self.semaphoreIndex]};
     }
 
-    pub fn present(self: *Self, image: *Image) !void {
+    pub fn present(self: *Self, image: *Image, waitSemaphore: c.VkSemaphore) !void {
         const imgIndex = image - self.images.ptr;
         try check_vk(c.vkQueuePresentKHR(
             self.gfx.device.universalQueue,
@@ -410,6 +419,8 @@ pub const Swapchain = struct {
                 .swapchainCount = 1,
                 .pSwapchains = &self.handle,
                 .pImageIndices = @ptrCast(&imgIndex),
+                .waitSemaphoreCount = @intFromBool(waitSemaphore != null),
+                .pWaitSemaphores = &waitSemaphore,
             }
         ));
     }
@@ -448,6 +459,16 @@ fn deviceTypePriority(t: c.VkPhysicalDeviceType) !i32 {
         c.VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU => 3,
         c.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU => 4,
         else => error.unknown_physical_device_type,
+    };
+}
+
+pub fn wholeImage(aspectMask: c.VkImageAspectFlags) c.VkImageSubresourceRange {
+    return .{
+        .aspectMask = aspectMask,
+        .baseArrayLayer = 0,
+        .layerCount = c.VK_REMAINING_ARRAY_LAYERS,
+        .baseMipLevel = 0,
+        .levelCount = c.VK_REMAINING_MIP_LEVELS,
     };
 }
 

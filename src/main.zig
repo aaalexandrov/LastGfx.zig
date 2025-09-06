@@ -38,11 +38,63 @@ pub fn main() !void {
 
         const swapImage = try swapchain.acquireNextImage();
 
-        //try cmds.begin();
-        //try cmds.end();
-        //try cmds.submit();
+        try vk.check_vk(c.vkResetFences(gfx.device.handle, 1, &cmds.fence));
 
-        try swapchain.present(swapImage.image);
+        try cmds.begin();
+
+        c.vkCmdPipelineBarrier2(cmds.handle, &c.VkDependencyInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &c.VkImageMemoryBarrier2{
+                .sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                .image = swapImage.image.handle,
+                .srcAccessMask = 0,
+                .dstAccessMask = c.VK_ACCESS_2_TRANSFER_READ_BIT,
+                .srcStageMask = c.VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                .dstStageMask = c.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+                .srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+                .oldLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+                .newLayout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .subresourceRange = vk.wholeImage(c.VK_IMAGE_ASPECT_COLOR_BIT),
+            },
+        });
+
+        c.vkCmdClearColorImage(
+            cmds.handle, 
+            swapImage.image.handle, 
+            c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
+            &c.VkClearColorValue{
+                .float32 = .{0, 0, 1, 1},
+            }, 
+            1, 
+            &vk.wholeImage(c.VK_IMAGE_ASPECT_COLOR_BIT)
+        );
+
+        c.vkCmdPipelineBarrier2(cmds.handle, &c.VkDependencyInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &c.VkImageMemoryBarrier2{
+                .sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                .image = swapImage.image.handle,
+                .srcAccessMask = c.VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                .dstAccessMask = c.VK_ACCESS_2_TRANSFER_READ_BIT,
+                .srcStageMask = c.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+                .dstStageMask = c.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+                .srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+                .oldLayout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .newLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                .subresourceRange = vk.wholeImage(c.VK_IMAGE_ASPECT_COLOR_BIT),
+            },
+        });
+
+        try cmds.end();
+        try cmds.submit(swapImage.semaphore);
+
+        try swapchain.present(swapImage.image, null);
+
+        try vk.check_vk(c.vkDeviceWaitIdle(gfx.device.handle));
     }
 }
 
