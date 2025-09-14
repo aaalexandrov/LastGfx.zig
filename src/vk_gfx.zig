@@ -151,6 +151,10 @@ pub const Gfx = struct {
             .pNext = &c.VkPhysicalDeviceSynchronization2Features{
                 .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES,
                 .synchronization2 = c.VK_TRUE,
+                .pNext = @constCast(&c.VkPhysicalDeviceMeshShaderFeaturesEXT{
+                    .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT,
+                    .meshShader = c.VK_TRUE,
+                }),
             },
             .queueCreateInfoCount = 1,
             .pQueueCreateInfos = &c.VkDeviceQueueCreateInfo{
@@ -181,22 +185,22 @@ pub const Gfx = struct {
         subresourceRange: c.VkImageSubresourceRange = wholeImage(c.VK_IMAGE_ASPECT_COLOR_BIT),
     };
     fn createImageView(self: *Self, opts: ImageViewOpts) !c.VkImageView {
-            var view: c.VkImageView = null;
-            try check(c.vkCreateImageView(
-                self.device.handle, 
-                &c.VkImageViewCreateInfo{
-                    .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                    .flags = opts.flags,
-                    .image = opts.image,
-                    .viewType = opts.viewType,
-                    .format = opts.format,
-                    .components = opts.components,
-                    .subresourceRange = opts.subresourceRange,
-                }, 
-                self.allocCB, 
-                &view
-            ));
-            return view;
+        var view: c.VkImageView = null;
+        try check(c.vkCreateImageView(
+            self.device.handle, 
+            &c.VkImageViewCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .flags = opts.flags,
+                .image = opts.image,
+                .viewType = opts.viewType,
+                .format = opts.format,
+                .components = opts.components,
+                .subresourceRange = opts.subresourceRange,
+            }, 
+            self.allocCB, 
+            &view
+        ));
+        return view;
     }
 
     pub fn waitIdle(self: *Self) !void {
@@ -248,7 +252,7 @@ pub const Commands = struct {
 
     pub const Self = @This();
     pub fn init(gfx: *Gfx) !Self {
-        var self: Self = .{.gfx = gfx};
+        var self: Self = .{ .gfx = gfx };
         try check(c.vkCreateCommandPool(
             gfx.device.handle, 
             &c.VkCommandPoolCreateInfo{
@@ -304,7 +308,7 @@ pub const Commands = struct {
     pub fn submit(self: *Self, waitSemaphore: c.VkSemaphore) !void {
         try check(c.vkQueueSubmit2(
             self.gfx.device.universalQueue,
-            1, 
+            1,
             &c.VkSubmitInfo2{
                 .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
                 .waitSemaphoreInfoCount = @intFromBool(waitSemaphore != null),
@@ -335,7 +339,7 @@ pub const Swapchain = struct {
     pub const Self = @This();
 
     pub fn init(gfx: *Gfx, window: ?*c.SDL_Window) !Self {
-        var self: Self = .{.gfx = gfx};
+        var self: Self = .{ .gfx = gfx };
         if (!c.SDL_Vulkan_CreateSurface(window, gfx.instance, gfx.allocCB, &self.surface))
             unreachable;
 
@@ -345,7 +349,7 @@ pub const Swapchain = struct {
         if (surfaceCaps.currentExtent.width > surfaceCaps.maxImageExtent.width or surfaceCaps.currentExtent.height > surfaceCaps.maxImageExtent.height)
             _ = c.SDL_GetWindowSize(window, @ptrCast(&surfaceCaps.currentExtent.width), @ptrCast(&surfaceCaps.currentExtent.height));
 
-        const swapchainInfo =c.VkSwapchainCreateInfoKHR{
+        const swapchainInfo = c.VkSwapchainCreateInfoKHR{
             .sType = c.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
             .surface = self.surface,
             .queueFamilyIndexCount = 1,
@@ -371,7 +375,7 @@ pub const Swapchain = struct {
         self.images = try gfx.alloc.alloc(Image, numImages);
         self.semaphores = try gfx.alloc.alloc(c.VkSemaphore, numImages);
         for (images, 0..) |img, i| {
-            const view = try gfx.createImageView(.{.image = img, .format = swapchainInfo.imageFormat});
+            const view = try gfx.createImageView(.{ .image = img, .format = swapchainInfo.imageFormat });
             self.images[i] = try Image.init(gfx, img, view, false);
             try check(c.vkCreateSemaphore(
                 gfx.device.handle, 
@@ -411,22 +415,46 @@ pub const Swapchain = struct {
             }, 
             &imgIndex
         ));
-        return .{.image = &self.images[imgIndex], .semaphore = self.semaphores[self.semaphoreIndex]};
+        return .{ .image = &self.images[imgIndex], .semaphore = self.semaphores[self.semaphoreIndex] };
     }
 
     pub fn present(self: *Self, image: *Image, waitSemaphore: c.VkSemaphore) !void {
         const imgIndex = image - self.images.ptr;
         try check(c.vkQueuePresentKHR(
-            self.gfx.device.universalQueue,
+            self.gfx.device.universalQueue, 
             &c.VkPresentInfoKHR{
                 .sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
                 .swapchainCount = 1,
                 .pSwapchains = &self.handle,
                 .pImageIndices = @ptrCast(&imgIndex),
                 .waitSemaphoreCount = @intFromBool(waitSemaphore != null),
-                .pWaitSemaphores = &waitSemaphore,
+                .pWaitSemaphores = &[_]c.VkSemaphore{waitSemaphore},
             }
         ));
+    }
+};
+
+pub const Usage = enum(u32) {
+    None = 0,
+    TransferSrc = 1 << 0,
+    TransferDst = 1 << 1,
+    TransferHost = 1 << 2,
+    ShaderRead = 1 << 3,
+    StorageWrite = 1 << 4,
+    RenderWrite = 1 << 5,
+    _,
+
+    pub const Present = .TransferSrc;
+
+    pub const Self = @This();
+    pub fn Or(self: Self, rhs:Self) Self {
+        return @enumFromInt(@intFromEnum(self) | @intFromEnum(rhs));
+    }
+    pub fn And(self: Self, rhs:Self) Self {
+        return @enumFromInt(@intFromEnum(self) & @intFromEnum(rhs));
+    }
+    pub fn Not(self: Self) Self {
+        return @enumFromInt(~@intFromEnum(self));
     }
 };
 
