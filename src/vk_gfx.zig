@@ -36,17 +36,15 @@ pub const Gfx = struct {
         self.alloc = allocator;
         self.allocCB = null;
 
-        var layers = std.ArrayList([*c]const u8).init(self.alloc);
-        defer layers.deinit();
+        var layers = try std.ArrayList([*c]const u8).initCapacity(self.alloc, 0);
+        defer layers.deinit(self.alloc);
 
-        var exts = std.ArrayList([*c]const u8).init(self.alloc);
-        defer exts.deinit();
+        var exts = try std.ArrayList([*c]const u8).initCapacity(self.alloc, 0);
+        defer exts.deinit(self.alloc);
 
         var sdlExtCount: u32 = 0;
         const sdlExts = c.SDL_Vulkan_GetInstanceExtensions(&sdlExtCount);
-        for (0..sdlExtCount) |e| {
-            try exts.append(sdlExts[e]);
-        }
+        try exts.appendSlice(self.alloc, sdlExts[0..sdlExtCount]);
 
         var dbgMessengerInfo = c.VkDebugUtilsMessengerCreateInfoEXT{
             .sType = c.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
@@ -56,8 +54,8 @@ pub const Gfx = struct {
             .pUserData = self,
         };
         if (debug) {
-            try layers.append("VK_LAYER_KHRONOS_validation");
-            try exts.append(c.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+            try layers.append(self.alloc, "VK_LAYER_KHRONOS_validation");
+            try exts.append(self.alloc, c.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         }
 
         const instInfo = c.VkInstanceCreateInfo{
@@ -117,16 +115,16 @@ pub const Gfx = struct {
         var numDevices: u32 = 0;
         try check(c.vkEnumeratePhysicalDevices(self.instance, &numDevices, null));
 
-        var devices = std.ArrayList(c.VkPhysicalDevice).init(self.alloc);
-        defer devices.deinit();
-        try devices.resize(numDevices);
+        var devices = try std.ArrayList(c.VkPhysicalDevice).initCapacity(self.alloc, 0);
+        defer devices.deinit(self.alloc);
+        try devices.resize(self.alloc, numDevices);
 
         try check(c.vkEnumeratePhysicalDevices(self.instance, &numDevices, devices.items.ptr));
 
         var bestProps: ?PhysicalDevice = null;
 
         for (devices.items) |device| {
-            const devProps = PhysicalDevice.init(self.instance, device, self.alloc);
+            const devProps = try PhysicalDevice.init(self.instance, device, self.alloc);
             if (devProps.props.apiVersion < API_VERSION)
                 continue;
             if (devProps.universalQueueFamily < 0)
@@ -186,20 +184,15 @@ pub const Gfx = struct {
     };
     fn createImageView(self: *Self, opts: ImageViewOpts) !c.VkImageView {
         var view: c.VkImageView = null;
-        try check(c.vkCreateImageView(
-            self.device.handle, 
-            &c.VkImageViewCreateInfo{
-                .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                .flags = opts.flags,
-                .image = opts.image,
-                .viewType = opts.viewType,
-                .format = opts.format,
-                .components = opts.components,
-                .subresourceRange = opts.subresourceRange,
-            }, 
-            self.allocCB, 
-            &view
-        ));
+        try check(c.vkCreateImageView(self.device.handle, &c.VkImageViewCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .flags = opts.flags,
+            .image = opts.image,
+            .viewType = opts.viewType,
+            .format = opts.format,
+            .components = opts.components,
+            .subresourceRange = opts.subresourceRange,
+        }, self.allocCB, &view));
         return view;
     }
 
@@ -214,7 +207,7 @@ pub const PhysicalDevice = struct {
     universalQueueFamily: i32 = -1,
 
     pub const Self = @This();
-    fn init(instance: c.VkInstance, physDev: c.VkPhysicalDevice, alloc: std.mem.Allocator) Self {
+    fn init(instance: c.VkInstance, physDev: c.VkPhysicalDevice, alloc: std.mem.Allocator) !Self {
         var phys: PhysicalDevice = undefined;
         phys.handle = physDev;
         c.vkGetPhysicalDeviceProperties(physDev, &phys.props);
@@ -222,9 +215,9 @@ pub const PhysicalDevice = struct {
 
         var numQueueFamilies: u32 = 0;
         c.vkGetPhysicalDeviceQueueFamilyProperties(physDev, &numQueueFamilies, null);
-        var queues = std.ArrayList(c.VkQueueFamilyProperties).init(alloc);
-        defer queues.deinit();
-        queues.resize(numQueueFamilies) catch @panic("OOM");
+        var queues = try std.ArrayList(c.VkQueueFamilyProperties).initCapacity(alloc, 0);
+        defer queues.deinit(alloc);
+        try queues.resize(alloc, numQueueFamilies);
         c.vkGetPhysicalDeviceQueueFamilyProperties(physDev, &numQueueFamilies, queues.items.ptr);
         const universalMask = c.VK_QUEUE_GRAPHICS_BIT | c.VK_QUEUE_COMPUTE_BIT | c.VK_QUEUE_TRANSFER_BIT;
         for (queues.items, 0..) |familyProps, familyIndex| {
@@ -253,35 +246,21 @@ pub const Commands = struct {
     pub const Self = @This();
     pub fn init(gfx: *Gfx) !Self {
         var self: Self = .{ .gfx = gfx };
-        try check(c.vkCreateCommandPool(
-            gfx.device.handle, 
-            &c.VkCommandPoolCreateInfo{
-                .sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-                .flags = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-                .queueFamilyIndex = @intCast(gfx.physical.universalQueueFamily),
-            }, 
-            gfx.allocCB, 
-            &self.pool
-        ));
-        try check(c.vkAllocateCommandBuffers(
-            gfx.device.handle, 
-            &c.VkCommandBufferAllocateInfo{
-                .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-                .commandPool = self.pool,
-                .commandBufferCount = 1,
-                .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            }, 
-            &self.handle
-        ));
-        try check(c.vkCreateFence(
-            gfx.device.handle, 
-            &c.VkFenceCreateInfo{
-                .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-                .flags = 0,
-            }, 
-            gfx.allocCB, 
-            &self.fence
-        ));
+        try check(c.vkCreateCommandPool(gfx.device.handle, &c.VkCommandPoolCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .flags = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+            .queueFamilyIndex = @intCast(gfx.physical.universalQueueFamily),
+        }, gfx.allocCB, &self.pool));
+        try check(c.vkAllocateCommandBuffers(gfx.device.handle, &c.VkCommandBufferAllocateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = self.pool,
+            .commandBufferCount = 1,
+            .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        }, &self.handle));
+        try check(c.vkCreateFence(gfx.device.handle, &c.VkFenceCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .flags = 0,
+        }, gfx.allocCB, &self.fence));
         return self;
     }
 
@@ -292,13 +271,10 @@ pub const Commands = struct {
     }
 
     pub fn begin(self: *Self) !void {
-        try check(c.vkBeginCommandBuffer(
-            self.handle, 
-            &c.VkCommandBufferBeginInfo{
-                .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-                .flags = 0,
-            }
-        ));
+        try check(c.vkBeginCommandBuffer(self.handle, &c.VkCommandBufferBeginInfo{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = 0,
+        }));
     }
 
     pub fn end(self: *Self) !void {
@@ -377,14 +353,9 @@ pub const Swapchain = struct {
         for (images, 0..) |img, i| {
             const view = try gfx.createImageView(.{ .image = img, .format = swapchainInfo.imageFormat });
             self.images[i] = try Image.init(gfx, img, view, false);
-            try check(c.vkCreateSemaphore(
-                gfx.device.handle, 
-                &c.VkSemaphoreCreateInfo{
-                    .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-                }, 
-                gfx.allocCB, 
-                &self.semaphores[i]
-            ));
+            try check(c.vkCreateSemaphore(gfx.device.handle, &c.VkSemaphoreCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            }, gfx.allocCB, &self.semaphores[i]));
         }
 
         return self;
@@ -404,33 +375,57 @@ pub const Swapchain = struct {
     pub fn acquireNextImage(self: *Self) !struct { image: *Image, semaphore: c.VkSemaphore } {
         self.semaphoreIndex = @rem(self.semaphoreIndex + 1, @as(u32, @intCast(self.semaphores.len)));
         var imgIndex: u32 = 0;
-        try check(c.vkAcquireNextImage2KHR(
-            self.gfx.device.handle, 
-            &c.VkAcquireNextImageInfoKHR{
-                .sType = c.VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR,
-                .swapchain = self.handle,
-                .deviceMask = 1,
-                .timeout = std.math.maxInt(u64),
-                .semaphore = self.semaphores[self.semaphoreIndex],
-            }, 
-            &imgIndex
-        ));
+        try check(c.vkAcquireNextImage2KHR(self.gfx.device.handle, &c.VkAcquireNextImageInfoKHR{
+            .sType = c.VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR,
+            .swapchain = self.handle,
+            .deviceMask = 1,
+            .timeout = std.math.maxInt(u64),
+            .semaphore = self.semaphores[self.semaphoreIndex],
+        }, &imgIndex));
         return .{ .image = &self.images[imgIndex], .semaphore = self.semaphores[self.semaphoreIndex] };
     }
 
     pub fn present(self: *Self, image: *Image, waitSemaphore: c.VkSemaphore) !void {
         const imgIndex = image - self.images.ptr;
-        try check(c.vkQueuePresentKHR(
-            self.gfx.device.universalQueue, 
-            &c.VkPresentInfoKHR{
-                .sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-                .swapchainCount = 1,
-                .pSwapchains = &self.handle,
-                .pImageIndices = @ptrCast(&imgIndex),
-                .waitSemaphoreCount = @intFromBool(waitSemaphore != null),
-                .pWaitSemaphores = &[_]c.VkSemaphore{waitSemaphore},
-            }
-        ));
+        try check(c.vkQueuePresentKHR(self.gfx.device.universalQueue, &c.VkPresentInfoKHR{
+            .sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .swapchainCount = 1,
+            .pSwapchains = &self.handle,
+            .pImageIndices = @ptrCast(&imgIndex),
+            .waitSemaphoreCount = @intFromBool(waitSemaphore != null),
+            .pWaitSemaphores = &[_]c.VkSemaphore{waitSemaphore},
+        }));
+    }
+};
+
+pub const Shader = struct {
+    handle: c.VkShaderModule = null,
+    filename: [:0] const u8 = "",
+
+    pub const Self = @This();
+
+    pub fn init(gfx: *Gfx, filename: [:0]const u8) !Self {
+        const code = try std.fs.cwd().readFileAllocOptions(gfx.alloc, filename, 10*1024*1024, null, std.mem.Alignment.of(u32), null);
+        defer gfx.alloc.free(code);
+        std.debug.assert(code.len % 4 == 0);
+        var self = try initCode(gfx, @as([*]const u32, @ptrCast(@alignCast(code.ptr)))[0..(code.len / 4)]);
+        self.filename = try gfx.alloc.dupeZ(u8, filename);
+        return self;
+    }
+
+    pub fn initCode(gfx: *Gfx, code: []const u32) !Self {
+        var self = Self {};
+        try check(c.vkCreateShaderModule(gfx.device.handle, &c.VkShaderModuleCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pCode = code.ptr,
+            .codeSize = code.len,
+        }, gfx.allocCB, &self.handle));
+        return self;
+    }
+
+    pub fn deinit(self: *Self, gfx: *Gfx) void {
+        gfx.alloc.free(self.filename);
+        c.vkDestroyShaderModule(gfx.device.handle, self.handle, gfx.allocCB);
     }
 };
 
@@ -440,17 +435,17 @@ pub const Usage = enum(u32) {
     TransferDst = 1 << 1,
     TransferHost = 1 << 2,
     ShaderRead = 1 << 3,
-    StorageWrite = 1 << 4,
+    ShaderWrite = 1 << 4,
     RenderWrite = 1 << 5,
     _,
 
     pub const Present = .TransferSrc;
 
     pub const Self = @This();
-    pub fn Or(self: Self, rhs:Self) Self {
+    pub fn Or(self: Self, rhs: Self) Self {
         return @enumFromInt(@intFromEnum(self) | @intFromEnum(rhs));
     }
-    pub fn And(self: Self, rhs:Self) Self {
+    pub fn And(self: Self, rhs: Self) Self {
         return @enumFromInt(@intFromEnum(self) & @intFromEnum(rhs));
     }
     pub fn Not(self: Self) Self {

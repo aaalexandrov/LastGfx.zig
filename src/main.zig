@@ -21,6 +21,9 @@ pub fn main() !void {
     var swapchain = try vk.Swapchain.init(&gfx, window);
     defer swapchain.deinit();
 
+    var shaderFrag = try vk.Shader.init(&gfx, "data/simple.frag.spv");
+    defer shaderFrag.deinit(&gfx);
+
     var cmds = try vk.Commands.init(&gfx);
     defer cmds.deinit();
 
