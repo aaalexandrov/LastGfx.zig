@@ -21,7 +21,10 @@ pub fn main() !void {
     var swapchain = try vk.Swapchain.init(&gfx, window);
     defer swapchain.deinit();
 
-    var shaderFrag = try vk.Shader.init(&gfx, "data/simple.frag.spv");
+    var shaderMesh = try vk.Shader.init(&gfx, "shaders/triangle.mesh.spv");
+    defer shaderMesh.deinit(&gfx);
+
+    var shaderFrag = try vk.Shader.init(&gfx, "shaders/triangle.frag.spv");
     defer shaderFrag.deinit(&gfx);
 
     var cmds = try vk.Commands.init(&gfx);
@@ -63,16 +66,9 @@ pub fn main() !void {
             },
         });
 
-        c.vkCmdClearColorImage(
-            cmds.handle, 
-            swapImage.image.handle, 
-            c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
-            &c.VkClearColorValue{
-                .float32 = .{0, 0, 1, 1},
-            }, 
-            1, 
-            &vk.wholeImage(c.VK_IMAGE_ASPECT_COLOR_BIT)
-        );
+        c.vkCmdClearColorImage(cmds.handle, swapImage.image.handle, c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &c.VkClearColorValue{
+            .float32 = .{ 0, 0, 1, 1 },
+        }, 1, &vk.wholeImage(c.VK_IMAGE_ASPECT_COLOR_BIT));
 
         c.vkCmdPipelineBarrier2(cmds.handle, &c.VkDependencyInfo{
             .sType = c.VK_STRUCTURE_TYPE_DEPENDENCY_INFO,

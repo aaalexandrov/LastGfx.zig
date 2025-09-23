@@ -43,8 +43,8 @@ pub fn build(b: *std.Build) !void {
     if (target.result.os.tag == .windows) {
         const env_map = try std.process.getEnvMap(b.allocator);
         if (env_map.get("VK_SDK_PATH")) |path| {
-            exe_mod.addLibraryPath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/lib", .{ path }) catch @panic("OOM") });
-            exe_mod.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include", .{ path }) catch @panic("OOM") });
+            exe_mod.addLibraryPath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/lib", .{path}) catch @panic("OOM") });
+            exe_mod.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include", .{path}) catch @panic("OOM") });
         }
     }
     const vk_lib_name = if (target.result.os.tag == .windows) "vulkan-1" else "vulkan";
@@ -56,6 +56,8 @@ pub fn build(b: *std.Build) !void {
         .name = "LastGfx_zig",
         .root_module = exe_mod,
     });
+
+    try compileShaders(b, "src/shaders", "bin/shaders");
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
@@ -96,4 +98,34 @@ pub fn build(b: *std.Build) !void {
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
+}
+
+fn compileShaders(b: *std.Build, srcPath: []const u8, dstPath: []const u8) !void {
+    var installStep = b.step("Install SPV", "ditto");
+    var dir = std.fs.cwd().openDir(srcPath, .{ .iterate = true }) catch unreachable;
+    var it = dir.iterate();
+    while (it.next() catch unreachable) |entry| {
+        if (entry.kind == .file and (std.mem.endsWith(u8, entry.name, ".mesh") or
+            std.mem.endsWith(u8, entry.name, ".frag")))
+        {
+            var buf: [1 << 8]u8 = undefined;
+            const output_name = std.fmt.bufPrint(&buf, "{s}.spv", .{entry.name}) catch unreachable;
+
+            const in_path = b.pathJoin(&.{ srcPath, entry.name });
+            const out_path = b.pathJoin(&.{ dstPath, output_name });
+
+            const cmd = b.addSystemCommand(&.{"glslc"});
+            cmd.addArg("--target-env=vulkan1.4");
+            cmd.addArg("-o");
+            const spvPath = cmd.addOutputFileArg(out_path);
+            cmd.addFileArg(b.path(in_path));
+
+            cmd.has_side_effects = false;
+
+            const inst = b.addInstallFile(spvPath, b.pathJoin(&.{ out_path }));
+            inst.step.dependOn(&cmd.step);
+            installStep.dependOn(&inst.step);
+        }
+    }
+    b.getInstallStep().dependOn(installStep);
 }

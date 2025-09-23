@@ -143,6 +143,7 @@ pub const Gfx = struct {
         var device: Device = undefined;
         const exts = [_][*c]const u8{
             c.VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+            c.VK_EXT_MESH_SHADER_EXTENSION_NAME,
         };
         try check(c.vkCreateDevice(self.physical.handle, &c.VkDeviceCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -152,6 +153,10 @@ pub const Gfx = struct {
                 .pNext = @constCast(&c.VkPhysicalDeviceMeshShaderFeaturesEXT{
                     .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT,
                     .meshShader = c.VK_TRUE,
+                    .pNext = @constCast(&c.VkPhysicalDeviceMaintenance4Features{
+                        .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES,
+                        .maintenance4 = c.VK_TRUE,
+                    }),
                 }),
             },
             .queueCreateInfoCount = 1,
@@ -400,21 +405,25 @@ pub const Swapchain = struct {
 
 pub const Shader = struct {
     handle: c.VkShaderModule = null,
-    filename: [:0] const u8 = "",
+    filename: [:0]const u8 = "",
 
     pub const Self = @This();
 
     pub fn init(gfx: *Gfx, filename: [:0]const u8) !Self {
-        const code = try std.fs.cwd().readFileAllocOptions(gfx.alloc, filename, 10*1024*1024, null, std.mem.Alignment.of(u32), null);
+        var exePathBuf: [std.fs.max_path_bytes]u8 = undefined;
+        const exePath = try std.fs.selfExeDirPath(&exePathBuf);
+        const relativePath = try std.fs.path.join(gfx.alloc, &.{exePath, filename});
+        defer gfx.alloc.free(relativePath);
+        const code = try std.fs.cwd().readFileAllocOptions(gfx.alloc, relativePath, 10 * 1024 * 1024, null, std.mem.Alignment.of(u32), null);
         defer gfx.alloc.free(code);
         std.debug.assert(code.len % 4 == 0);
-        var self = try initCode(gfx, @as([*]const u32, @ptrCast(@alignCast(code.ptr)))[0..(code.len / 4)]);
+        var self = try initCode(gfx, @as([*]const u32, @ptrCast(@alignCast(code.ptr)))[0..(code.len)]);
         self.filename = try gfx.alloc.dupeZ(u8, filename);
         return self;
     }
 
     pub fn initCode(gfx: *Gfx, code: []const u32) !Self {
-        var self = Self {};
+        var self = Self{};
         try check(c.vkCreateShaderModule(gfx.device.handle, &c.VkShaderModuleCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
             .pCode = code.ptr,
