@@ -28,6 +28,7 @@ pub const Gfx = struct {
     dbgMessenger: c.VkDebugUtilsMessengerEXT = null,
     physical: PhysicalDevice,
     device: Device,
+    pipelineLayout: PipelineLayout,
 
     pub const API_VERSION = c.VK_API_VERSION_1_4;
     pub const Self = @This();
@@ -93,9 +94,11 @@ pub const Gfx = struct {
         });
 
         self.device = try self.createDevice();
+        self.pipelineLayout = try PipelineLayout.init(self);
     }
 
     pub fn deinit(self: *Self) void {
+        self.pipelineLayout.deinit(self);
         c.vkDestroyDevice(self.device.handle, self.allocCB);
 
         if (self.dbgMessenger != null) {
@@ -144,6 +147,9 @@ pub const Gfx = struct {
         const exts = [_][*c]const u8{
             c.VK_KHR_SWAPCHAIN_EXTENSION_NAME,
             c.VK_EXT_MESH_SHADER_EXTENSION_NAME,
+            c.VK_EXT_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME, 
+            c.VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME,
+            c.VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
         };
         try check(c.vkCreateDevice(self.physical.handle, &c.VkDeviceCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -156,6 +162,21 @@ pub const Gfx = struct {
                     .pNext = @constCast(&c.VkPhysicalDeviceMaintenance4Features{
                         .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES,
                         .maintenance4 = c.VK_TRUE,
+                        .pNext = @constCast(&c.VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT{
+                            .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MUTABLE_DESCRIPTOR_TYPE_FEATURES_EXT,
+                            .mutableDescriptorType = c.VK_TRUE,
+                            .pNext = @constCast(&c.VkPhysicalDeviceDescriptorIndexingFeatures{
+                                .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES,
+                                .shaderUniformTexelBufferArrayDynamicIndexing = c.VK_TRUE,
+                                .shaderStorageTexelBufferArrayDynamicIndexing = c.VK_TRUE,
+                                .shaderUniformBufferArrayNonUniformIndexing = c.VK_TRUE,
+                                .shaderStorageBufferArrayNonUniformIndexing = c.VK_TRUE,
+                                .shaderStorageImageArrayNonUniformIndexing = c.VK_TRUE,
+                                .shaderUniformTexelBufferArrayNonUniformIndexing = c.VK_TRUE,
+                                .shaderStorageTexelBufferArrayNonUniformIndexing = c.VK_TRUE,
+                                .descriptorBindingVariableDescriptorCount = c.VK_TRUE,
+                            }),
+                        }),
                     }),
                 }),
             },
@@ -240,6 +261,78 @@ pub const PhysicalDevice = struct {
 pub const Device = struct {
     handle: c.VkDevice,
     universalQueue: c.VkQueue,
+};
+
+pub const PipelineLayout = struct {
+    handle: c.VkPipelineLayout = null,
+    setLayouts: [1]c.VkDescriptorSetLayout = .{ null },
+    pushConstants: [1]c.VkPushConstantRange = .{ .{} },
+
+    pub const Self = @This();
+    fn init(gfx: *Gfx) !Self {
+        var self = Self{};
+        self.pushConstants = .{
+            c.VkPushConstantRange{
+                .stageFlags = c.VK_SHADER_STAGE_ALL_GRAPHICS | c.VK_SHADER_STAGE_COMPUTE_BIT,
+                .offset = 0,
+                .size = 8,
+            },
+        };
+        var descTypes = [_]c.VkDescriptorType{
+            c.VK_DESCRIPTOR_TYPE_SAMPLER,
+            c.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+            c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+            c.VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,
+            c.VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER,
+            c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        };
+        const descSetInfos = [_]c.VkDescriptorSetLayoutCreateInfo{
+            .{
+                .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                .flags = c.VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
+                .bindingCount = 1,
+                .pBindings = &c.VkDescriptorSetLayoutBinding{
+                    .binding = 0,
+                    .stageFlags = c.VK_SHADER_STAGE_ALL_GRAPHICS | c.VK_SHADER_STAGE_COMPUTE_BIT,
+                    .descriptorCount = 1,
+                    .descriptorType = c.VK_DESCRIPTOR_TYPE_MUTABLE_EXT,
+                },
+                .pNext = &c.VkDescriptorSetLayoutBindingFlagsCreateInfo{
+                    .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+                    .bindingCount = 1,
+                    .pBindingFlags = &[_]c.VkDescriptorBindingFlags{ c.VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT },
+                    .pNext = &c.VkMutableDescriptorTypeCreateInfoEXT {
+                        .sType = c.VK_STRUCTURE_TYPE_MUTABLE_DESCRIPTOR_TYPE_CREATE_INFO_EXT,
+                        .mutableDescriptorTypeListCount = 1,
+                        .pMutableDescriptorTypeLists = &c.VkMutableDescriptorTypeListEXT{
+                            .descriptorTypeCount = @intCast(descTypes.len),
+                            .pDescriptorTypes = &descTypes,
+                        }
+                    },
+                },
+            },
+        };
+        for (descSetInfos, &self.setLayouts) |descSetInfo, *setLayout| {
+            try check(c.vkCreateDescriptorSetLayout(gfx.device.handle, &descSetInfo, gfx.allocCB, setLayout));
+        }
+        try check(c.vkCreatePipelineLayout(gfx.device.handle, &c.VkPipelineLayoutCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .flags = 0,
+            .setLayoutCount = @intCast(self.setLayouts.len),
+            .pSetLayouts = &self.setLayouts[0],
+            .pushConstantRangeCount = @intCast(self.pushConstants.len),
+            .pPushConstantRanges = &self.pushConstants[0],
+        }, gfx.allocCB, &self.handle));
+        return self;
+    }
+
+    fn deinit(self: *Self, gfx: *Gfx) void {
+        c.vkDestroyPipelineLayout(gfx.device.handle, self.handle, gfx.allocCB);
+        for (self.setLayouts) |layout| {
+            c.vkDestroyDescriptorSetLayout(gfx.device.handle, layout, gfx.allocCB);
+        }
+    }
 };
 
 pub const Commands = struct {
@@ -412,7 +505,7 @@ pub const Shader = struct {
     pub fn init(gfx: *Gfx, filename: [:0]const u8) !Self {
         var exePathBuf: [std.fs.max_path_bytes]u8 = undefined;
         const exePath = try std.fs.selfExeDirPath(&exePathBuf);
-        const relativePath = try std.fs.path.join(gfx.alloc, &.{exePath, filename});
+        const relativePath = try std.fs.path.join(gfx.alloc, &.{ exePath, filename });
         defer gfx.alloc.free(relativePath);
         const code = try std.fs.cwd().readFileAllocOptions(gfx.alloc, relativePath, 10 * 1024 * 1024, null, std.mem.Alignment.of(u32), null);
         defer gfx.alloc.free(code);
@@ -435,6 +528,28 @@ pub const Shader = struct {
     pub fn deinit(self: *Self, gfx: *Gfx) void {
         gfx.alloc.free(self.filename);
         c.vkDestroyShaderModule(gfx.device.handle, self.handle, gfx.allocCB);
+    }
+};
+
+pub const Pipeline = struct {
+    handle: c.VkPipeline = null,
+    name: [:0]const u8 = "",
+
+    pub const Self = @This();
+
+    // pub fn initGraphics(gfx: *Gfx, meshShader: *Shader, fragShader: *Shader, name: [:0]const u8) !Self {
+    //     var self = Self{};
+    //     try check(c.vkCreateGraphicsPipelines(gfx.device.handle, null, 1, &c.VkGraphicsPipelineCreateInfo{
+    //         .sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+    //         .layout = gfx.pipelineLayout.handle,
+    //     }, gfx.allocCB, &self.handle));
+    //     self.name = try gfx.alloc.dupeZ(u8, name);
+    //     return self;
+    // }
+
+    pub fn deinit(self: *Self, gfx: *Gfx) void {
+        gfx.alloc.free(self.name);
+        c.vkDestroyPipeline(gfx.device.handle, self.handle, gfx.allocCB);
     }
 };
 
