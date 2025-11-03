@@ -147,9 +147,10 @@ pub const Gfx = struct {
         const exts = [_][*c]const u8{
             c.VK_KHR_SWAPCHAIN_EXTENSION_NAME,
             c.VK_EXT_MESH_SHADER_EXTENSION_NAME,
-            c.VK_EXT_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME, 
+            c.VK_EXT_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME,
             c.VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME,
             c.VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
+            c.VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
         };
         try check(c.vkCreateDevice(self.physical.handle, &c.VkDeviceCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -165,16 +166,21 @@ pub const Gfx = struct {
                         .pNext = @constCast(&c.VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT{
                             .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MUTABLE_DESCRIPTOR_TYPE_FEATURES_EXT,
                             .mutableDescriptorType = c.VK_TRUE,
-                            .pNext = @constCast(&c.VkPhysicalDeviceDescriptorIndexingFeatures{
-                                .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES,
-                                .shaderUniformTexelBufferArrayDynamicIndexing = c.VK_TRUE,
-                                .shaderStorageTexelBufferArrayDynamicIndexing = c.VK_TRUE,
-                                .shaderUniformBufferArrayNonUniformIndexing = c.VK_TRUE,
-                                .shaderStorageBufferArrayNonUniformIndexing = c.VK_TRUE,
-                                .shaderStorageImageArrayNonUniformIndexing = c.VK_TRUE,
-                                .shaderUniformTexelBufferArrayNonUniformIndexing = c.VK_TRUE,
-                                .shaderStorageTexelBufferArrayNonUniformIndexing = c.VK_TRUE,
-                                .descriptorBindingVariableDescriptorCount = c.VK_TRUE,
+                            .pNext = @constCast(&c.VkPhysicalDeviceDescriptorIndexingFeatures{ 
+                                .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES, 
+                                .shaderUniformTexelBufferArrayDynamicIndexing = c.VK_TRUE, 
+                                .shaderStorageTexelBufferArrayDynamicIndexing = c.VK_TRUE, 
+                                .shaderUniformBufferArrayNonUniformIndexing = c.VK_TRUE, 
+                                .shaderStorageBufferArrayNonUniformIndexing = c.VK_TRUE, 
+                                .shaderStorageImageArrayNonUniformIndexing = c.VK_TRUE, 
+                                .shaderUniformTexelBufferArrayNonUniformIndexing = c.VK_TRUE, 
+                                .shaderStorageTexelBufferArrayNonUniformIndexing = c.VK_TRUE, 
+                                .descriptorBindingVariableDescriptorCount = c.VK_TRUE, 
+                                .runtimeDescriptorArray = c.VK_TRUE, 
+                                .pNext = @constCast(&c.VkPhysicalDeviceDynamicRenderingFeaturesKHR{
+                                    .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES,
+                                    .dynamicRendering = c.VK_TRUE,
+                                }),
                             }),
                         }),
                     }),
@@ -265,8 +271,8 @@ pub const Device = struct {
 
 pub const PipelineLayout = struct {
     handle: c.VkPipelineLayout = null,
-    setLayouts: [1]c.VkDescriptorSetLayout = .{ null },
-    pushConstants: [1]c.VkPushConstantRange = .{ .{} },
+    setLayouts: [1]c.VkDescriptorSetLayout = .{null},
+    pushConstants: [1]c.VkPushConstantRange = .{.{}},
 
     pub const Self = @This();
     fn init(gfx: *Gfx) !Self {
@@ -301,14 +307,16 @@ pub const PipelineLayout = struct {
                 .pNext = &c.VkDescriptorSetLayoutBindingFlagsCreateInfo{
                     .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
                     .bindingCount = 1,
-                    .pBindingFlags = &[_]c.VkDescriptorBindingFlags{ c.VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT },
-                    .pNext = &c.VkMutableDescriptorTypeCreateInfoEXT {
-                        .sType = c.VK_STRUCTURE_TYPE_MUTABLE_DESCRIPTOR_TYPE_CREATE_INFO_EXT,
-                        .mutableDescriptorTypeListCount = 1,
+                    .pBindingFlags = &[_]c.VkDescriptorBindingFlags{
+                        c.VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT,
+                    },
+                    .pNext = &c.VkMutableDescriptorTypeCreateInfoEXT{ 
+                        .sType = c.VK_STRUCTURE_TYPE_MUTABLE_DESCRIPTOR_TYPE_CREATE_INFO_EXT, 
+                        .mutableDescriptorTypeListCount = 1, 
                         .pMutableDescriptorTypeLists = &c.VkMutableDescriptorTypeListEXT{
                             .descriptorTypeCount = @intCast(descTypes.len),
                             .pDescriptorTypes = &descTypes,
-                        }
+                        },
                     },
                 },
             },
@@ -537,15 +545,58 @@ pub const Pipeline = struct {
 
     pub const Self = @This();
 
-    // pub fn initGraphics(gfx: *Gfx, meshShader: *Shader, fragShader: *Shader, name: [:0]const u8) !Self {
-    //     var self = Self{};
-    //     try check(c.vkCreateGraphicsPipelines(gfx.device.handle, null, 1, &c.VkGraphicsPipelineCreateInfo{
-    //         .sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-    //         .layout = gfx.pipelineLayout.handle,
-    //     }, gfx.allocCB, &self.handle));
-    //     self.name = try gfx.alloc.dupeZ(u8, name);
-    //     return self;
-    // }
+    pub fn initGraphics(gfx: *Gfx, meshShader: *const Shader, fragShader: *const Shader, name: [:0]const u8) !Self {
+        var self = Self{};
+        var stages = [_]c.VkPipelineShaderStageCreateInfo{
+            c.VkPipelineShaderStageCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .stage = c.VK_SHADER_STAGE_MESH_BIT_EXT,
+                .module = meshShader.handle,
+                .pName = "main",
+            },
+            c.VkPipelineShaderStageCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+                .module = fragShader.handle,
+                .pName = "main",
+            },
+        };
+        var dynStates = [_]c.VkDynamicState{
+            c.VK_DYNAMIC_STATE_VIEWPORT,
+            c.VK_DYNAMIC_STATE_SCISSOR,
+        };
+        try check(c.vkCreateGraphicsPipelines(gfx.device.handle, null, 1, &c.VkGraphicsPipelineCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .flags = c.VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
+            .layout = gfx.pipelineLayout.handle,
+            .stageCount = @intCast(stages.len),
+            .pStages = &stages,
+            .pDynamicState = &c.VkPipelineDynamicStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+                .dynamicStateCount = @intCast(dynStates.len),
+                .pDynamicStates = &dynStates,
+            },
+            .pMultisampleState = &c.VkPipelineMultisampleStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+                .minSampleShading = 1.0,
+                .rasterizationSamples = c.VK_SAMPLE_COUNT_1_BIT,
+            },
+            .pRasterizationState = &c.VkPipelineRasterizationStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+                .polygonMode = c.VK_POLYGON_MODE_FILL,
+                .lineWidth = 1.0,
+                .cullMode = c.VK_CULL_MODE_NONE,
+                .frontFace = c.VK_FRONT_FACE_CLOCKWISE,
+            },
+            .pViewportState = &c.VkPipelineViewportStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+                .viewportCount = 1,
+                .scissorCount = 1,
+            },
+        }, gfx.allocCB, &self.handle));
+        self.name = try gfx.alloc.dupeZ(u8, name);
+        return self;
+    }
 
     pub fn deinit(self: *Self, gfx: *Gfx) void {
         gfx.alloc.free(self.name);

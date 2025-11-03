@@ -27,6 +27,9 @@ pub fn main() !void {
     var shaderFrag = try vk.Shader.init(&gfx, "shaders/triangle.frag.spv");
     defer shaderFrag.deinit(&gfx);
 
+    var pipeline = try vk.Pipeline.initGraphics(&gfx, &shaderMesh, &shaderFrag, "triangle");
+    defer pipeline.deinit(&gfx);
+
     var cmds = try vk.Commands.init(&gfx);
     defer cmds.deinit();
 
