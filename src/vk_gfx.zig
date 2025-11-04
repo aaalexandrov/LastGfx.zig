@@ -29,6 +29,8 @@ pub const Gfx = struct {
     physical: PhysicalDevice,
     device: Device,
     pipelineLayout: PipelineLayout,
+    swapchainFormat: c.VkFormat,
+    swapchainColorspace: c.VkColorSpaceKHR,
 
     pub const API_VERSION = c.VK_API_VERSION_1_4;
     pub const Self = @This();
@@ -95,6 +97,9 @@ pub const Gfx = struct {
 
         self.device = try self.createDevice();
         self.pipelineLayout = try PipelineLayout.init(self);
+
+        self.swapchainFormat = c.VK_FORMAT_B8G8R8A8_SRGB;
+        self.swapchainColorspace = c.VK_COLORSPACE_SRGB_NONLINEAR_KHR;
     }
 
     pub fn deinit(self: *Self) void {
@@ -379,8 +384,19 @@ pub const Commands = struct {
     pub fn begin(self: *Self) !void {
         try check(c.vkBeginCommandBuffer(self.handle, &c.VkCommandBufferBeginInfo{
             .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .flags = 0,
         }));
+    }
+
+    pub fn renderBegin(self: *Self, 
+        //colorTargets: []*Image, depthStencilTarget: ?*Image
+    ) !void {
+        try check(c.vkCmdBeginRendering(self.handle, &c.VkRenderingInfo{
+            .sType = c.VK_STRUCTURE_TYPE_RENDERING_INFO,
+        }));
+    }
+
+    pub fn renderEnd(self: *Self) !void {
+        try check(c.vkCmdEndRendering(self.handle));
     }
 
     pub fn end(self: *Self) !void {
@@ -437,8 +453,8 @@ pub const Swapchain = struct {
             .queueFamilyIndexCount = 1,
             .pQueueFamilyIndices = &[_]u32{@intCast(gfx.physical.universalQueueFamily)},
             .presentMode = c.VK_PRESENT_MODE_FIFO_KHR,
-            .imageFormat = c.VK_FORMAT_B8G8R8A8_SRGB,
-            .imageColorSpace = c.VK_COLORSPACE_SRGB_NONLINEAR_KHR,
+            .imageFormat = gfx.swapchainFormat,
+            .imageColorSpace = gfx.swapchainColorspace,
             .imageExtent = surfaceCaps.currentExtent,
             .imageArrayLayers = 1,
             .imageUsage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | c.VK_IMAGE_USAGE_SAMPLED_BIT | c.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | c.VK_IMAGE_USAGE_TRANSFER_DST_BIT,
@@ -588,11 +604,23 @@ pub const Pipeline = struct {
                 .cullMode = c.VK_CULL_MODE_NONE,
                 .frontFace = c.VK_FRONT_FACE_CLOCKWISE,
             },
+            .pColorBlendState = &c.VkPipelineColorBlendStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+                .attachmentCount = 1,
+                .pAttachments = &c.VkPipelineColorBlendAttachmentState{
+                    .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT,
+                },
+            },
             .pViewportState = &c.VkPipelineViewportStateCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
                 .viewportCount = 1,
                 .scissorCount = 1,
             },
+            .pNext = @constCast(&c.VkPipelineRenderingCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+                .colorAttachmentCount = 1,
+                .pColorAttachmentFormats = &gfx.swapchainFormat,
+            }),
         }, gfx.allocCB, &self.handle));
         self.name = try gfx.alloc.dupeZ(u8, name);
         return self;
