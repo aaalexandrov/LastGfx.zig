@@ -58,20 +58,37 @@ pub fn main() !void {
                 .sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                 .image = swapImage.image.handle,
                 .srcAccessMask = 0,
-                .dstAccessMask = c.VK_ACCESS_2_TRANSFER_READ_BIT,
+                .dstAccessMask = c.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                 .srcStageMask = c.VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                .dstStageMask = c.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+                .dstStageMask = c.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                 .srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
                 .oldLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
-                .newLayout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .newLayout = c.VK_IMAGE_LAYOUT_GENERAL,
                 .subresourceRange = vk.wholeImage(c.VK_IMAGE_ASPECT_COLOR_BIT),
             },
         });
 
-        c.vkCmdClearColorImage(cmds.handle, swapImage.image.handle, c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &c.VkClearColorValue{
+        const clearValue = c.VkClearColorValue{
             .float32 = .{ 0, 0, 1, 1 },
-        }, 1, &vk.wholeImage(c.VK_IMAGE_ASPECT_COLOR_BIT));
+        };
+        try cmds.renderBegin(&[_]vk.RenderTarget{.{.image = swapImage.image, .clearValue = c.VkClearValue{.color = clearValue}}}, null);
+
+        const viewRect = c.VkRect2D{.extent = swapImage.image.desc.extent2D()};
+        cmds.setViewport(&c.VkViewport{
+            .x = @floatFromInt(viewRect.offset.x),
+            .y = @floatFromInt(viewRect.offset.y),
+            .width = @floatFromInt(viewRect.extent.width),
+            .height = @floatFromInt(viewRect.extent.height),
+            .minDepth = 0.0,
+            .maxDepth = 1.0,
+        });
+        cmds.setScissor(&viewRect);
+
+        cmds.bindRenderPipeline(&pipeline);
+        cmds.drawMeshTasks(3, 1, 1);
+
+        cmds.renderEnd();
 
         c.vkCmdPipelineBarrier2(cmds.handle, &c.VkDependencyInfo{
             .sType = c.VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
@@ -79,13 +96,13 @@ pub fn main() !void {
             .pImageMemoryBarriers = &c.VkImageMemoryBarrier2{
                 .sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                 .image = swapImage.image.handle,
-                .srcAccessMask = c.VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                .srcAccessMask = c.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                 .dstAccessMask = c.VK_ACCESS_2_TRANSFER_READ_BIT,
-                .srcStageMask = c.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+                .srcStageMask = c.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                 .dstStageMask = c.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
                 .srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
-                .oldLayout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .oldLayout = c.VK_IMAGE_LAYOUT_GENERAL,
                 .newLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                 .subresourceRange = vk.wholeImage(c.VK_IMAGE_ASPECT_COLOR_BIT),
             },

@@ -31,6 +31,7 @@ pub const Gfx = struct {
     pipelineLayout: PipelineLayout,
     swapchainFormat: c.VkFormat,
     swapchainColorspace: c.VkColorSpaceKHR,
+    cmdDrawMeshTasksEXT: c.PFN_vkCmdDrawMeshTasksEXT = null,
 
     pub const API_VERSION = c.VK_API_VERSION_1_4;
     pub const Self = @This();
@@ -203,6 +204,10 @@ pub const Gfx = struct {
         }, self.allocCB, &device.handle));
         c.vkGetDeviceQueue(device.handle, @intCast(self.physical.universalQueueFamily), 0, &device.universalQueue);
         std.debug.assert(device.universalQueue != null);
+
+        self.cmdDrawMeshTasksEXT = @ptrCast(c.vkGetDeviceProcAddr(device.handle, "vkCmdDrawMeshTasksEXT"));
+        std.debug.assert(self.cmdDrawMeshTasksEXT != null);
+
         return device;
     }
 
@@ -348,6 +353,23 @@ pub const PipelineLayout = struct {
     }
 };
 
+pub const RenderTarget = struct {
+    image: *Image,
+    clearValue: ?c.VkClearValue = null,
+
+    pub const Self = @This();
+    fn attachment(self: *const Self) c.VkRenderingAttachmentInfo {
+        return .{
+            .sType = c.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .imageView = self.image.view,
+            .imageLayout = c.VK_IMAGE_LAYOUT_GENERAL,
+            .loadOp = if (self.clearValue) |_| c.VK_ATTACHMENT_LOAD_OP_CLEAR else c.VK_ATTACHMENT_LOAD_OP_LOAD,
+            .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
+            .clearValue = if (self.clearValue) |clr| clr else std.mem.zeroes(c.VkClearValue),
+        };
+    }
+};
+
 pub const Commands = struct {
     handle: c.VkCommandBuffer = null,
     pool: c.VkCommandPool = null,
@@ -387,16 +409,47 @@ pub const Commands = struct {
         }));
     }
 
-    pub fn renderBegin(self: *Self, 
-        //colorTargets: []*Image, depthStencilTarget: ?*Image
-    ) !void {
-        try check(c.vkCmdBeginRendering(self.handle, &c.VkRenderingInfo{
+    pub fn renderBegin(self: *Self, colorTargets: []const RenderTarget, depthStencilTarget: ?RenderTarget) !void {
+        var colorAttachments = try std.ArrayList(c.VkRenderingAttachmentInfo).initCapacity(self.gfx.alloc, colorTargets.len);
+        defer colorAttachments.deinit(self.gfx.alloc);
+        for (colorTargets) |clrTarget| {
+            try colorAttachments.append(self.gfx.alloc, clrTarget.attachment());
+        }
+
+        var depthAttachment: c.VkRenderingAttachmentInfo = undefined;
+        if (depthStencilTarget) |depthStencil| {
+            depthAttachment = depthStencil.attachment();
+        }
+
+        c.vkCmdBeginRendering(self.handle, &c.VkRenderingInfo{
             .sType = c.VK_STRUCTURE_TYPE_RENDERING_INFO,
-        }));
+            .layerCount = 1,
+            .renderArea = c.VkRect2D{.extent = colorTargets[0].image.desc.extent2D()},
+            .colorAttachmentCount = @intCast(colorAttachments.items.len),
+            .pColorAttachments = colorAttachments.items.ptr,
+            .pDepthAttachment = if (depthStencilTarget) |_| &depthAttachment else null,
+            .pStencilAttachment = if (depthStencilTarget) |_| &depthAttachment else null,
+        });
     }
 
-    pub fn renderEnd(self: *Self) !void {
-        try check(c.vkCmdEndRendering(self.handle));
+    pub fn setViewport(self: *Self, viewport: *const c.VkViewport) void {
+        c.vkCmdSetViewport(self.handle, 0, 1, viewport);
+    }
+
+    pub fn setScissor(self: *Self, rect: *const c.VkRect2D) void {
+        c.vkCmdSetScissor(self.handle, 0, 1, rect);
+    }
+
+    pub fn bindRenderPipeline(self: *Self, pipeline: *const Pipeline) void {
+        c.vkCmdBindPipeline(self.handle, c.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle);
+    }
+
+    pub fn drawMeshTasks(self: *Self, groupCountX: u32, groupCountY: u32, groupCountZ: u32) void {
+        self.gfx.cmdDrawMeshTasksEXT.?(self.handle, groupCountX, groupCountY, groupCountZ);
+    }
+
+    pub fn renderEnd(self: *Self) void {
+        c.vkCmdEndRendering(self.handle);
     }
 
     pub fn end(self: *Self) !void {
@@ -474,7 +527,12 @@ pub const Swapchain = struct {
         self.semaphores = try gfx.alloc.alloc(c.VkSemaphore, numImages);
         for (images, 0..) |img, i| {
             const view = try gfx.createImageView(.{ .image = img, .format = swapchainInfo.imageFormat });
-            self.images[i] = try Image.init(gfx, img, view, false);
+            const desc = Image.Descriptor{
+                .format = swapchainInfo.imageFormat,
+                .width = @intCast(swapchainInfo.imageExtent.width),
+                .height = @intCast(swapchainInfo.imageExtent.height),
+            };
+            self.images[i] = try Image.init(gfx, &desc, img, view, false);
             try check(c.vkCreateSemaphore(gfx.device.handle, &c.VkSemaphoreCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
             }, gfx.allocCB, &self.semaphores[i]));
@@ -676,14 +734,31 @@ pub const Usage = enum(u32) {
 pub const Image = struct {
     handle: c.VkImage = null,
     view: c.VkImageView = null,
+    desc: Descriptor,
     ownImage: bool = true,
     gfx: *Gfx,
 
+    pub const Descriptor = struct {
+        format: c.VkFormat = c.VK_FORMAT_UNDEFINED,
+        width: i32 = 1,
+        height: i32 = 1,
+        depth: i32 = 1,
+        mips: i8 = 1,
+
+        pub fn extent2D(self: *const @This()) c.VkExtent2D {
+            return .{.width = @intCast(self.width), .height = @intCast(self.height)};
+        }
+        pub fn extent3D(self: *const @This()) c.VkExtent3D {
+            return .{.width = @intCast(self.width), .height = @intCast(self.height), .depth = @intCast(self.depth)};
+        }
+    };
+
     pub const Self = @This();
-    pub fn init(gfx: *Gfx, image: c.VkImage, view: c.VkImageView, ownImage: bool) !Image {
+    pub fn init(gfx: *Gfx, desc: *const Descriptor, image: c.VkImage, view: c.VkImageView, ownImage: bool) !Image {
         const img: Image = .{
             .handle = image,
             .view = view,
+            .desc = desc.*,
             .ownImage = ownImage,
             .gfx = gfx,
         };
