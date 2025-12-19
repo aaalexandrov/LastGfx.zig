@@ -32,6 +32,7 @@ pub const Gfx = struct {
     swapchainFormat: c.VkFormat,
     swapchainColorspace: c.VkColorSpaceKHR,
     cmdDrawMeshTasksEXT: c.PFN_vkCmdDrawMeshTasksEXT = null,
+    vma: c.VmaAllocator = null,
 
     pub const API_VERSION = c.VK_API_VERSION_1_4;
     pub const Self = @This();
@@ -101,9 +102,22 @@ pub const Gfx = struct {
 
         self.swapchainFormat = c.VK_FORMAT_B8G8R8A8_SRGB;
         self.swapchainColorspace = c.VK_COLORSPACE_SRGB_NONLINEAR_KHR;
+
+        try check(c.vmaCreateAllocator(
+            &c.VmaAllocatorCreateInfo{
+                .instance = self.instance,
+                .physicalDevice = self.physical.handle,
+                .device = self.device.handle,
+                .vulkanApiVersion = API_VERSION,
+                .pAllocationCallbacks = self.allocCB,
+            },
+            &self.vma
+        ));
+        std.debug.assert(self.vma != null);
     }
 
     pub fn deinit(self: *Self) void {
+        c.vmaDestroyAllocator(self.vma);
         self.pipelineLayout.deinit(self);
         c.vkDestroyDevice(self.device.handle, self.allocCB);
 

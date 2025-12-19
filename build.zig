@@ -40,6 +40,9 @@ pub fn build(b: *std.Build) !void {
     const sdl_lib = sdl_dep.artifact("SDL3");
     exe_mod.linkLibrary(sdl_lib);
 
+    exe_mod.addCSourceFile(.{.file = .{ .cwd_relative = "./src/vk_mem_alloc.cpp" }});
+    exe_mod.link_libcpp = true;
+
     if (target.result.os.tag == .windows) {
         const env_map = try std.process.getEnvMap(b.allocator);
         if (env_map.get("VK_SDK_PATH")) |path| {
