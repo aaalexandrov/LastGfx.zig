@@ -48,6 +48,7 @@ pub fn build(b: *std.Build) !void {
         if (env_map.get("VK_SDK_PATH")) |path| {
             exe_mod.addLibraryPath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/lib", .{path}) catch @panic("OOM") });
             exe_mod.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include", .{path}) catch @panic("OOM") });
+            exe_mod.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include/vma", .{path}) catch @panic("OOM") });
         }
     }
     const vk_lib_name = if (target.result.os.tag == .windows) "vulkan-1" else "vulkan";
