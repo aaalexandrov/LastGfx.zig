@@ -500,28 +500,37 @@ pub const Swapchain = struct {
     semaphores: []c.VkSemaphore = &.{},
     semaphoreIndex: u32 = 0,
     gfx: *Gfx,
+    window: ?*c.SDL_Window,
 
     pub const Self = @This();
 
     pub fn init(gfx: *Gfx, window: ?*c.SDL_Window) !Self {
-        var self: Self = .{ .gfx = gfx };
+        var self: Self = .{ .gfx = gfx, .window = window };
         if (!c.SDL_Vulkan_CreateSurface(window, gfx.instance, gfx.allocCB, &self.surface))
             unreachable;
 
+        try self.initSwapchain();
+
+        return self;
+    }
+
+    fn initSwapchain(self: *Self) !void {
+        std.debug.assert(self.handle == null);
+
         var surfaceCaps: c.VkSurfaceCapabilitiesKHR = undefined;
-        try check(c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(gfx.physical.handle, self.surface, &surfaceCaps));
+        try check(c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(self.gfx.physical.handle, self.surface, &surfaceCaps));
 
         if (surfaceCaps.currentExtent.width > surfaceCaps.maxImageExtent.width or surfaceCaps.currentExtent.height > surfaceCaps.maxImageExtent.height)
-            _ = c.SDL_GetWindowSize(window, @ptrCast(&surfaceCaps.currentExtent.width), @ptrCast(&surfaceCaps.currentExtent.height));
+            _ = c.SDL_GetWindowSize(self.window, @ptrCast(&surfaceCaps.currentExtent.width), @ptrCast(&surfaceCaps.currentExtent.height));
 
         const swapchainInfo = c.VkSwapchainCreateInfoKHR{
             .sType = c.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
             .surface = self.surface,
             .queueFamilyIndexCount = 1,
-            .pQueueFamilyIndices = &[_]u32{@intCast(gfx.physical.universalQueueFamily)},
+            .pQueueFamilyIndices = &[_]u32{@intCast(self.gfx.physical.universalQueueFamily)},
             .presentMode = c.VK_PRESENT_MODE_FIFO_KHR,
-            .imageFormat = gfx.swapchainFormat,
-            .imageColorSpace = gfx.swapchainColorspace,
+            .imageFormat = self.gfx.swapchainFormat,
+            .imageColorSpace = self.gfx.swapchainColorspace,
             .imageExtent = surfaceCaps.currentExtent,
             .imageArrayLayers = 1,
             .imageUsage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | c.VK_IMAGE_USAGE_SAMPLED_BIT | c.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | c.VK_IMAGE_USAGE_TRANSFER_DST_BIT,
@@ -530,32 +539,30 @@ pub const Swapchain = struct {
             .preTransform = surfaceCaps.currentTransform,
             .compositeAlpha = c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
         };
-        try check(c.vkCreateSwapchainKHR(gfx.device.handle, &swapchainInfo, gfx.allocCB, &self.handle));
+        try check(c.vkCreateSwapchainKHR(self.gfx.device.handle, &swapchainInfo, self.gfx.allocCB, &self.handle));
 
         var numImages: u32 = 0;
-        try check(c.vkGetSwapchainImagesKHR(gfx.device.handle, self.handle, &numImages, null));
-        const images = try gfx.alloc.alloc(c.VkImage, numImages);
-        defer gfx.alloc.free(images);
-        try check(c.vkGetSwapchainImagesKHR(gfx.device.handle, self.handle, &numImages, images.ptr));
-        self.images = try gfx.alloc.alloc(Image, numImages);
-        self.semaphores = try gfx.alloc.alloc(c.VkSemaphore, numImages);
+        try check(c.vkGetSwapchainImagesKHR(self.gfx.device.handle, self.handle, &numImages, null));
+        const images = try self.gfx.alloc.alloc(c.VkImage, numImages);
+        defer self.gfx.alloc.free(images);
+        try check(c.vkGetSwapchainImagesKHR(self.gfx.device.handle, self.handle, &numImages, images.ptr));
+        self.images = try self.gfx.alloc.alloc(Image, numImages);
+        self.semaphores = try self.gfx.alloc.alloc(c.VkSemaphore, numImages);
         for (images, 0..) |img, i| {
-            const view = try gfx.createImageView(.{ .image = img, .format = swapchainInfo.imageFormat });
+            const view = try self.gfx.createImageView(.{ .image = img, .format = swapchainInfo.imageFormat });
             const desc = Image.Descriptor{
                 .format = swapchainInfo.imageFormat,
                 .width = @intCast(swapchainInfo.imageExtent.width),
                 .height = @intCast(swapchainInfo.imageExtent.height),
             };
-            self.images[i] = try Image.init(gfx, &desc, img, view, false);
-            try check(c.vkCreateSemaphore(gfx.device.handle, &c.VkSemaphoreCreateInfo{
+            self.images[i] = try Image.init(self.gfx, &desc, img, view, false);
+            try check(c.vkCreateSemaphore(self.gfx.device.handle, &c.VkSemaphoreCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-            }, gfx.allocCB, &self.semaphores[i]));
+            }, self.gfx.allocCB, &self.semaphores[i]));
         }
-
-        return self;
     }
 
-    pub fn deinit(self: *Self) void {
+    fn deinitSwapchain(self: *Self) void {
         for (self.images, self.semaphores) |*img, sem| {
             img.deinit();
             c.vkDestroySemaphore(self.gfx.device.handle, sem, self.gfx.allocCB);
@@ -563,7 +570,17 @@ pub const Swapchain = struct {
         self.gfx.alloc.free(self.images);
         self.gfx.alloc.free(self.semaphores);
         c.vkDestroySwapchainKHR(self.gfx.device.handle, self.handle, self.gfx.allocCB);
+        self.handle = null;
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.deinitSwapchain();
         c.SDL_Vulkan_DestroySurface(self.gfx.instance, self.surface, self.gfx.allocCB);
+    }
+
+    pub fn recreate(self: *Self) !void {
+        self.deinitSwapchain();
+        try self.initSwapchain();
     }
 
     pub fn acquireNextImage(self: *Self) !struct { image: *Image, semaphore: c.VkSemaphore } {
