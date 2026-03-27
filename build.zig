@@ -59,6 +59,8 @@ pub fn build(b: *std.Build) !void {
     const exe = b.addExecutable(.{
         .name = "LastGfx_zig",
         .root_module = exe_mod,
+        .use_llvm = true,
+        .use_lld = true,
     });
 
     try compileShaders(b, "src/shaders", "bin/shaders");
