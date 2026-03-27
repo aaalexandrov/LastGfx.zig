@@ -167,8 +167,7 @@ pub const Gfx = struct {
         const exts = [_][*c]const u8{
             c.VK_KHR_SWAPCHAIN_EXTENSION_NAME,
             c.VK_EXT_MESH_SHADER_EXTENSION_NAME,
-            c.VK_EXT_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME,
-            c.VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME,
+            c.VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME,
             c.VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
             c.VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
         };
@@ -183,9 +182,9 @@ pub const Gfx = struct {
                     .pNext = @constCast(&c.VkPhysicalDeviceMaintenance4Features{
                         .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES,
                         .maintenance4 = c.VK_TRUE,
-                        .pNext = @constCast(&c.VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT{
-                            .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MUTABLE_DESCRIPTOR_TYPE_FEATURES_EXT,
-                            .mutableDescriptorType = c.VK_TRUE,
+                        .pNext = @constCast(&c.VkPhysicalDeviceDescriptorHeapFeaturesEXT{
+                            .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT,
+                            .descriptorHeap = c.VK_TRUE,
                             .pNext = @constCast(&c.VkPhysicalDeviceDescriptorIndexingFeatures{
                                 .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES,
                                 .shaderUniformTexelBufferArrayDynamicIndexing = c.VK_TRUE,
