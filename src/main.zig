@@ -30,6 +30,12 @@ pub fn main() !void {
     var pipeline = try vk.Pipeline.initGraphics(&gfx, &shaderMesh, &shaderFrag, "triangle");
     defer pipeline.deinit(&gfx);
 
+    var buffer = try vk.Buffer.init(
+        &gfx, 
+        &vk.Buffer.Descriptor{.size=1024, .usage = vk.Usage.ShaderRead.Or(.HostAccess)},
+        16);
+    defer buffer.deinit();
+
     var cmds = try vk.Commands.init(&gfx);
     defer cmds.deinit();
 

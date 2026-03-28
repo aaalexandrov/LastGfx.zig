@@ -102,6 +102,7 @@ pub const Gfx = struct {
         self.swapchainColorspace = c.VK_COLORSPACE_SRGB_NONLINEAR_KHR;
 
         try check(c.vmaCreateAllocator(&c.VmaAllocatorCreateInfo{
+            .flags = c.VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE4_BIT | c.VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE5_BIT,
             .instance = self.instance,
             .physicalDevice = self.physical.handle,
             .device = self.device.handle,
@@ -162,6 +163,7 @@ pub const Gfx = struct {
             c.VK_KHR_SWAPCHAIN_EXTENSION_NAME,
             c.VK_EXT_MESH_SHADER_EXTENSION_NAME,
             c.VK_KHR_MAINTENANCE_4_EXTENSION_NAME,
+            c.VK_KHR_MAINTENANCE_5_EXTENSION_NAME,
             c.VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
             c.VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME,
             c.VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME,
@@ -178,18 +180,22 @@ pub const Gfx = struct {
                     .pNext = @constCast(&c.VkPhysicalDeviceMaintenance4Features{
                         .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES,
                         .maintenance4 = c.VK_TRUE,
-                        .pNext = @constCast(&c.VkPhysicalDeviceBufferDeviceAddressFeatures{
-                            .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES,
-                            .bufferDeviceAddress = c.VK_TRUE,
-                            .pNext = @constCast(&c.VkPhysicalDeviceShaderUntypedPointersFeaturesKHR{
-                                .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_UNTYPED_POINTERS_FEATURES_KHR,
-                                .shaderUntypedPointers = c.VK_TRUE,
-                                .pNext = @constCast(&c.VkPhysicalDeviceDescriptorHeapFeaturesEXT{
-                                    .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT,
-                                    .descriptorHeap = c.VK_TRUE,
-                                    .pNext = @constCast(&c.VkPhysicalDeviceDynamicRenderingFeatures{
-                                        .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES,
-                                        .dynamicRendering = c.VK_TRUE,
+                        .pNext = @constCast(&c.VkPhysicalDeviceMaintenance5Features{
+                            .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES,
+                            .maintenance5 = c.VK_TRUE,
+                            .pNext = @constCast(&c.VkPhysicalDeviceBufferDeviceAddressFeatures{
+                                .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES,
+                                .bufferDeviceAddress = c.VK_TRUE,
+                                .pNext = @constCast(&c.VkPhysicalDeviceShaderUntypedPointersFeaturesKHR{
+                                    .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_UNTYPED_POINTERS_FEATURES_KHR,
+                                    .shaderUntypedPointers = c.VK_TRUE,
+                                    .pNext = @constCast(&c.VkPhysicalDeviceDescriptorHeapFeaturesEXT{
+                                        .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT,
+                                        .descriptorHeap = c.VK_TRUE,
+                                        .pNext = @constCast(&c.VkPhysicalDeviceDynamicRenderingFeatures{
+                                            .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES,
+                                            .dynamicRendering = c.VK_TRUE,
+                                        }),
                                     }),
                                 }),
                             }),
@@ -469,13 +475,13 @@ pub const Swapchain = struct {
         self.images = try self.gfx.alloc.alloc(Image, numImages);
         self.semaphores = try self.gfx.alloc.alloc(c.VkSemaphore, numImages);
         for (images, 0..) |img, i| {
-            const view = try self.gfx.createImageView(.{ .image = img, .format = swapchainInfo.imageFormat });
             const desc = Image.Descriptor{
                 .format = swapchainInfo.imageFormat,
                 .width = @intCast(swapchainInfo.imageExtent.width),
                 .height = @intCast(swapchainInfo.imageExtent.height),
+                .usage = Usage.Present.Or(.RenderWrite).Or(.ShaderRead),
             };
-            self.images[i] = try Image.init(self.gfx, &desc, img, view, false);
+            self.images[i] = try Image.initExisting(self.gfx, &desc, img);
             try check(c.vkCreateSemaphore(self.gfx.device.handle, &c.VkSemaphoreCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
             }, self.gfx.allocCB, &self.semaphores[i]));
@@ -665,13 +671,14 @@ pub const Usage = enum(u32) {
     None = 0,
     TransferSrc = 1 << 0,
     TransferDst = 1 << 1,
-    TransferHost = 1 << 2,
+    HostAccess = 1 << 2,
     ShaderRead = 1 << 3,
     ShaderWrite = 1 << 4,
     RenderWrite = 1 << 5,
+    DescriptorHeap = 1 << 7,
     _,
 
-    pub const Present = .TransferSrc;
+    pub const Present = Self.TransferSrc;
 
     pub const Self = @This();
     pub fn Or(self: Self, rhs: Self) Self {
@@ -683,13 +690,93 @@ pub const Usage = enum(u32) {
     pub fn Not(self: Self) Self {
         return @enumFromInt(~@intFromEnum(self));
     }
+
+    pub fn HasAny(self: Self, rhs: Self) bool {
+        return self.And(rhs) != .None;
+    }
+
+    pub fn HasAll(self: Self, rhs: Self) bool {
+        return self.And(rhs) == rhs;
+    }
+};
+
+fn getVmaAllocationCreateFlags(usage: Usage) c.VmaAllocationCreateFlags {
+    var allocationFlags: c.VmaAllocationCreateFlags = 0;
+    if (usage.HasAny(.HostAccess))
+        allocationFlags |= c.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | c.VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    return allocationFlags;
+}
+
+pub const Buffer = struct {
+    handle: c.VkBuffer = null,
+    allocation: c.VmaAllocation = null,
+    gpuAddress: c.VkDeviceMemory = null,
+    hostAddress: ?[*]u8 = null,
+    desc: Descriptor,
+    gfx: *Gfx,
+
+    pub const Descriptor = struct {
+        size: u64 = 0,
+        usage: Usage = Usage.ShaderRead.Or(.TransferDst),
+    };
+
+    pub const Self = @This();
+
+    pub fn init(gfx: *Gfx, desc: *const Descriptor, alignment: u64) !Self {
+        var self = Buffer{
+            .desc = desc.*,
+            .gfx = gfx,
+        };
+
+        var bufferUsage: c.VkBufferUsageFlags2 = 
+            if (desc.usage == .DescriptorHeap) 
+                c.VK_BUFFER_USAGE_2_DESCRIPTOR_HEAP_BIT_EXT 
+            else 
+                c.VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT;
+        if (desc.usage.HasAny(.TransferSrc))
+            bufferUsage |= c.VK_BUFFER_USAGE_2_TRANSFER_SRC_BIT;
+        if (desc.usage.HasAny(.TransferDst))
+            bufferUsage |= c.VK_BUFFER_USAGE_2_TRANSFER_DST_BIT;
+
+        var allocInfo: c.VmaAllocationInfo = undefined;
+
+        try check(c.vmaCreateBufferWithAlignment(
+            gfx.vma, 
+            &c.VkBufferCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                .size = desc.size,
+                .pNext = &c.VkBufferUsageFlags2CreateInfo {
+                    .sType = c.VK_STRUCTURE_TYPE_BUFFER_USAGE_FLAGS_2_CREATE_INFO,
+                    .usage = bufferUsage,
+                },
+            }, 
+            &c.VmaAllocationCreateInfo{
+                .flags = getVmaAllocationCreateFlags(desc.usage),
+                .usage = c.VMA_MEMORY_USAGE_AUTO,
+            },
+            alignment,
+            &self.handle,
+            &self.allocation, 
+            &allocInfo
+        ));
+
+        self.gpuAddress = @ptrFromInt(@as(u64, @intFromPtr(allocInfo.deviceMemory)) + allocInfo.offset);
+        self.hostAddress = @ptrCast(allocInfo.pMappedData);
+
+        return self;
+    }
+
+    pub fn deinit(self: *Self) void {
+        c.vmaDestroyBuffer(self.gfx.vma, self.handle, self.allocation);
+    }
 };
 
 pub const Image = struct {
     handle: c.VkImage = null,
+    allocation: c.VmaAllocation = null,
     view: c.VkImageView = null,
+    hostAddress: ?[*]u8 = null,
     desc: Descriptor,
-    ownImage: bool = true,
     gfx: *Gfx,
 
     pub const Descriptor = struct {
@@ -698,6 +785,7 @@ pub const Image = struct {
         height: i32 = 1,
         depth: i32 = 1,
         mips: i8 = 1,
+        usage: Usage = Usage.ShaderRead.Or(.TransferDst),
 
         pub fn extent2D(self: *const @This()) c.VkExtent2D {
             return .{ .width = @intCast(self.width), .height = @intCast(self.height) };
@@ -708,22 +796,51 @@ pub const Image = struct {
     };
 
     pub const Self = @This();
-    pub fn init(gfx: *Gfx, desc: *const Descriptor, image: c.VkImage, view: c.VkImageView, ownImage: bool) !Image {
-        const img: Image = .{
-            .handle = image,
-            .view = view,
-            .desc = desc.*,
-            .ownImage = ownImage,
+    pub fn init(gfx: *Gfx, desc: *const Descriptor) !Image {
+        var self = Self {
+            .desc = desc,
             .gfx = gfx,
         };
 
-        return img;
+        var allocInfo: c.VmaAllocationInfo = undefined;
+
+        try check( c.vmaCreateImage(
+            gfx.vma, 
+            &c.VkImageCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+
+            },
+            &c.VmaAllocationCreateInfo{
+                .flags = getVmaAllocationCreateFlags(desc.usage),
+                .usage = c.VMA_MEMORY_USAGE_AUTO,
+            },
+            &self.handle,
+            &self.allocation,
+            &allocInfo
+        ));
+
+        self.hostAddress = @ptrCast(allocInfo.pMappedData);
+
+        self.view = try gfx.createImageView(.{ .image = self.handle, .format = desc.format });
+
+        return self;
+    }
+
+    pub fn initExisting(gfx: *Gfx, desc: *const Descriptor, image: c.VkImage) !Image {
+        const self= Self {
+            .handle = image,
+            .view = try gfx.createImageView(.{ .image = image, .format = desc.format }),
+            .desc = desc.*,
+            .gfx = gfx,
+        };
+
+        return self;
     }
 
     pub fn deinit(self: *Self) void {
         c.vkDestroyImageView(self.gfx.device.handle, self.view, self.gfx.allocCB);
-        if (self.ownImage)
-            c.vkDestroyImage(self.gfx.device.handle, self.handle, self.gfx.allocCB);
+        if (self.allocation != null)
+            c.vmaDestroyImage(self.gfx.vma, self.handle, self.allocation);
     }
 };
 
