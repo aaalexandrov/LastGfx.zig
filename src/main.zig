@@ -32,7 +32,7 @@ pub fn main() !void {
 
     var buffer = try vk.Buffer.init(
         &gfx, 
-        &vk.Buffer.Descriptor{ 
+        &.{ 
             .size = 1024, 
             .usage = vk.Usage.ShaderRead.Or(.HostAccess),
         }, 
@@ -41,12 +41,15 @@ pub fn main() !void {
 
     var image = try vk.Image.init(
         &gfx, 
-        &vk.Image.Descriptor{ 
+        &.{ 
             .format = c.VK_FORMAT_R8G8B8A8_UNORM,
             .width = 64,
             .height = 64,
         });
     defer image.deinit();
+
+    var linearSampler = try vk.Sampler.init(&gfx, &.{});
+    defer linearSampler.deinit();
 
     var cmds = try vk.Commands.init(&gfx);
     defer cmds.deinit();

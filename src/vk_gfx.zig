@@ -998,7 +998,11 @@ pub const Sampler = struct {
     gfx: *Gfx,
 
     pub const Descriptor = struct {
-
+        addressMode: c.VkSamplerAddressMode = c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        magFilter: c.VkFilter = c.VK_FILTER_LINEAR,
+        minFilter: c.VkFilter = c.VK_FILTER_LINEAR,
+        mipmapMode: c.VkSamplerMipmapMode = c.VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        maxAnisotropy: f32 = 0,
     };
 
     pub const Self = @This();
@@ -1010,16 +1014,30 @@ pub const Sampler = struct {
         };
 
         try check(c.vkCreateSampler(
-            gfx.handle,
+            gfx.device.handle,
             &c.VkSamplerCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-                
+                .flags = 0,
+                .magFilter = desc.magFilter,
+                .minFilter = desc.minFilter,
+                .mipmapMode = desc.mipmapMode,
+                .addressModeU = desc.addressMode,
+                .addressModeV = desc.addressMode,
+                .addressModeW = desc.addressMode,
+                .anisotropyEnable = if (desc.maxAnisotropy > 0) c.VK_TRUE else c.VK_FALSE,
+                .maxAnisotropy = desc.maxAnisotropy,
+                .minLod = 0,
+                .maxLod = c.VK_LOD_CLAMP_NONE,
             },
             gfx.allocCB,
             &self.handle
         ));
 
         return self;
+    }
+
+    pub fn deinit(self: *Self) void {
+        c.vkDestroySampler(self.gfx.device.handle, self.handle, self.gfx.allocCB);
     }
 };
 
