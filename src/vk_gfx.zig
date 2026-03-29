@@ -31,6 +31,7 @@ pub const Gfx = struct {
     swapchainFormat: c.VkFormat,
     swapchainColorspace: c.VkColorSpaceKHR,
     cmdDrawMeshTasksEXT: c.PFN_vkCmdDrawMeshTasksEXT = null,
+    cmdPushDataEXT: c.PFN_vkCmdPushDataEXT = null,
     vma: c.VmaAllocator = null,
 
     pub const API_VERSION = c.VK_API_VERSION_1_4;
@@ -218,6 +219,8 @@ pub const Gfx = struct {
 
         self.cmdDrawMeshTasksEXT = @ptrCast(c.vkGetDeviceProcAddr(device.handle, "vkCmdDrawMeshTasksEXT"));
         std.debug.assert(self.cmdDrawMeshTasksEXT != null);
+        self.cmdPushDataEXT = @ptrCast(c.vkGetDeviceProcAddr(device.handle, "vkCmdPushDataEXT"));
+        std.debug.assert(self.cmdPushDataEXT != null);
 
         return device;
     }
@@ -384,6 +387,25 @@ pub const Commands = struct {
         c.vkCmdBindPipeline(self.handle, c.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle);
     }
 
+    pub fn pushDataBytes(self: *Self, data: []const u8, offset: u32) void {
+        self.gfx.cmdPushDataEXT.?(self.handle, &c.VkPushDataInfoEXT{
+            .sType = c.VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT,
+            .offset = offset,
+            .data = .{
+                .address = data.ptr,
+                .size = data.len,
+            },
+        });
+    }
+
+    pub fn pushData(self: *Self, arg: anytype) void {
+        comptime if (@typeInfo(@TypeOf(arg)) != .pointer)
+            @compileError("pushData argument has to be a pointer");
+
+        const bytes = @as([*]const u8, @ptrCast(arg))[0..@sizeOf(@TypeOf(arg.*))];
+        self.pushDataBytes(bytes, 0);
+    }
+
     pub fn drawMeshTasks(self: *Self, groupCountX: u32, groupCountY: u32, groupCountZ: u32) void {
         self.gfx.cmdDrawMeshTasksEXT.?(self.handle, groupCountX, groupCountY, groupCountZ);
     }
@@ -427,6 +449,7 @@ pub const Swapchain = struct {
     semaphoreIndex: u32 = 0,
     gfx: *Gfx,
     window: ?*c.SDL_Window,
+    capabilitiesHasValidExtent: bool = true,
 
     pub const Self = @This();
 
@@ -446,7 +469,8 @@ pub const Swapchain = struct {
         var surfaceCaps: c.VkSurfaceCapabilitiesKHR = undefined;
         try check(c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(self.gfx.physical.handle, self.surface, &surfaceCaps));
 
-        if (surfaceCaps.currentExtent.width > surfaceCaps.maxImageExtent.width or surfaceCaps.currentExtent.height > surfaceCaps.maxImageExtent.height)
+        self.capabilitiesHasValidExtent = surfaceCaps.currentExtent.width <= surfaceCaps.maxImageExtent.width and surfaceCaps.currentExtent.height <= surfaceCaps.maxImageExtent.height;
+        if (!self.capabilitiesHasValidExtent)
             _ = c.SDL_GetWindowSize(self.window, @ptrCast(&surfaceCaps.currentExtent.width), @ptrCast(&surfaceCaps.currentExtent.height));
 
         const swapchainInfo = c.VkSwapchainCreateInfoKHR{
@@ -509,7 +533,21 @@ pub const Swapchain = struct {
         try self.initSwapchain();
     }
 
+    fn checkSurfaceSize(self: *Self) bool {
+        if (self.capabilitiesHasValidExtent)
+            return true;
+
+        var width: i32 = -1;
+        var height: i32 = -1;
+        _ = c.SDL_GetWindowSize(self.window, &width, &height);
+
+        return width == self.images[0].desc.width and height == self.images[0].desc.height;
+    }
+
     pub fn acquireNextImage(self: *Self) !struct { image: *Image, semaphore: c.VkSemaphore } {
+        if (!self.checkSurfaceSize())
+            return error.vk_error_out_of_date_khr;
+
         self.semaphoreIndex = @rem(self.semaphoreIndex + 1, @as(u32, @intCast(self.semaphores.len)));
         var imgIndex: u32 = 0;
         try check(c.vkAcquireNextImage2KHR(self.gfx.device.handle, &c.VkAcquireNextImageInfoKHR{

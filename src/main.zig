@@ -30,10 +30,7 @@ pub fn main() !void {
     var pipeline = try vk.Pipeline.initGraphics(&gfx, &shaderMesh, &shaderFrag, "triangle");
     defer pipeline.deinit(&gfx);
 
-    var buffer = try vk.Buffer.init(
-        &gfx, 
-        &vk.Buffer.Descriptor{.size=1024, .usage = vk.Usage.ShaderRead.Or(.HostAccess)},
-        16);
+    var buffer = try vk.Buffer.init(&gfx, &vk.Buffer.Descriptor{ .size = 1024, .usage = vk.Usage.ShaderRead.Or(.HostAccess) }, 16);
     defer buffer.deinit();
 
     var cmds = try vk.Commands.init(&gfx);
@@ -77,9 +74,9 @@ pub fn main() !void {
             const clearValue = c.VkClearColorValue{
                 .float32 = .{ 0, 0, 1, 1 },
             };
-            try cmds.renderBegin(&[_]vk.RenderTarget{.{.image = swapImage.image, .clearValue = c.VkClearValue{.color = clearValue}}}, null);
+            try cmds.renderBegin(&[_]vk.RenderTarget{.{ .image = swapImage.image, .clearValue = c.VkClearValue{ .color = clearValue } }}, null);
 
-            const viewRect = c.VkRect2D{.extent = swapImage.image.desc.extent2D()};
+            const viewRect = c.VkRect2D{ .extent = swapImage.image.desc.extent2D() };
             cmds.setViewport(&c.VkViewport{
                 .x = @floatFromInt(viewRect.offset.x),
                 .y = @floatFromInt(viewRect.offset.y),
@@ -89,6 +86,9 @@ pub fn main() !void {
                 .maxDepth = 1.0,
             });
             cmds.setScissor(&viewRect);
+
+            const color: [4]f32 = .{ 1, 0.5, 0, 1 };
+            cmds.pushData(&color);
 
             cmds.bindRenderPipeline(&pipeline);
             cmds.drawMeshTasks(3, 1, 1);
@@ -125,7 +125,6 @@ pub fn main() !void {
             },
             else => |anotherErr| return anotherErr,
         }
-
     }
 }
 
