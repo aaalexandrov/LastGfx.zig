@@ -470,6 +470,9 @@ pub const Swapchain = struct {
     fn initSwapchain(self: *Self) !void {
         std.debug.assert(self.handle == null);
 
+        if (!self.isWindowRenderable())
+            return;
+
         var surfaceCaps: c.VkSurfaceCapabilitiesKHR = undefined;
         try check(c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(self.gfx.physical.handle, self.surface, &surfaceCaps));
 
@@ -546,8 +549,13 @@ pub const Swapchain = struct {
         return self.handle != null;
     }
 
+    pub fn isWindowRenderable(self: *Self) bool {
+        const windowFlags = c.SDL_GetWindowFlags(self.window);
+        return windowFlags & (c.SDL_WINDOW_OCCLUDED | c.SDL_WINDOW_HIDDEN | c.SDL_WINDOW_MINIMIZED) == 0;
+    }
+
     pub fn checkSurfaceSize(self: *Self) bool {
-        if (self.handle == null)
+        if (self.handle == null or !self.isWindowRenderable())
             return false;
         if (self.capabilitiesHasValidExtent)
             return true;
@@ -574,7 +582,8 @@ pub const Swapchain = struct {
             error.vk_suboptimal_khr, error.vk_error_out_of_date_khr => {
                 return null;
             },
-            else => |anotherErr| return anotherErr,
+            else => |anotherErr| 
+                return anotherErr,
         };
         return .{ .image = &self.images[imgIndex], .semaphore = self.semaphores[self.semaphoreIndex] };
     }
@@ -775,6 +784,19 @@ pub const Buffer = struct {
     pub const Descriptor = struct {
         size: u64 = 0,
         usage: Usage = Usage.ShaderRead.Or(.TransferDst),
+
+        pub fn bufferUsage(self: *const @This()) c.VkBufferUsageFlags2 {
+            var bufUsage: c.VkBufferUsageFlags2 = 
+            if (self.usage == .DescriptorHeap) 
+                c.VK_BUFFER_USAGE_2_DESCRIPTOR_HEAP_BIT_EXT 
+            else 
+                c.VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT;
+            if (self.usage.HasAny(.TransferSrc))
+                bufUsage |= c.VK_BUFFER_USAGE_2_TRANSFER_SRC_BIT;
+            if (self.usage.HasAny(.TransferDst))
+                bufUsage |= c.VK_BUFFER_USAGE_2_TRANSFER_DST_BIT;
+            return bufUsage;
+        }
     };
 
     pub const Self = @This();
@@ -785,16 +807,6 @@ pub const Buffer = struct {
             .gfx = gfx,
         };
 
-        var bufferUsage: c.VkBufferUsageFlags2 = 
-            if (desc.usage == .DescriptorHeap) 
-                c.VK_BUFFER_USAGE_2_DESCRIPTOR_HEAP_BIT_EXT 
-            else 
-                c.VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT;
-        if (desc.usage.HasAny(.TransferSrc))
-            bufferUsage |= c.VK_BUFFER_USAGE_2_TRANSFER_SRC_BIT;
-        if (desc.usage.HasAny(.TransferDst))
-            bufferUsage |= c.VK_BUFFER_USAGE_2_TRANSFER_DST_BIT;
-
         var allocInfo: c.VmaAllocationInfo = undefined;
 
         try check(c.vmaCreateBufferWithAlignment(
@@ -804,7 +816,7 @@ pub const Buffer = struct {
                 .size = desc.size,
                 .pNext = &c.VkBufferUsageFlags2CreateInfo {
                     .sType = c.VK_STRUCTURE_TYPE_BUFFER_USAGE_FLAGS_2_CREATE_INFO,
-                    .usage = bufferUsage,
+                    .usage = desc.bufferUsage(),
                 },
             }, 
             &c.VmaAllocationCreateInfo{
@@ -828,6 +840,18 @@ pub const Buffer = struct {
     }
 };
 
+pub fn isDepthStencilFormat(format: c.VkFormat) bool {
+    return switch (format) {
+        c.VK_FORMAT_D16_UNORM, 
+        c.VK_FORMAT_D16_UNORM_S8_UINT,
+        c.VK_FORMAT_D24_UNORM_S8_UINT,
+        c.VK_FORMAT_D32_SFLOAT,
+        c.VK_FORMAT_D32_SFLOAT_S8_UINT,
+        c.VK_FORMAT_X8_D24_UNORM_PACK32 => true,
+        else => false,
+    };
+}
+
 pub const Image = struct {
     handle: c.VkImage = null,
     allocation: c.VmaAllocation = null,
@@ -839,8 +863,8 @@ pub const Image = struct {
     pub const Descriptor = struct {
         format: c.VkFormat = c.VK_FORMAT_UNDEFINED,
         width: i32 = 1,
-        height: i32 = 1,
-        depth: i32 = 1,
+        height: i32 = 0,
+        depth: i32 = 0,
         mips: i8 = 1,
         usage: Usage = Usage.ShaderRead.Or(.TransferDst),
 
@@ -848,24 +872,82 @@ pub const Image = struct {
             return .{ .width = @intCast(self.width), .height = @intCast(self.height) };
         }
         pub fn extent3D(self: *const @This()) c.VkExtent3D {
-            return .{ .width = @intCast(self.width), .height = @intCast(self.height), .depth = @intCast(self.depth) };
+            return .{ .width = @intCast(self.width), .height = @intCast(@max(self.height, 1)), .depth = @intCast(@max(self.depth, 1)) };
+        }
+
+        pub fn imageType(self: *const @This()) c.VkImageType {
+            return 
+                if (self.depth > 0)
+                    c.VK_IMAGE_TYPE_3D
+                else if (self.height > 0)
+                    c.VK_IMAGE_TYPE_2D
+                else
+                    c.VK_IMAGE_TYPE_1D;
+        }
+
+        pub fn imageViewType(self: *const @This()) c.VkImageViewType {
+            return 
+                if (self.depth > 0)
+                    c.VK_IMAGE_VIEW_TYPE_3D
+                else if (self.width > 0) 
+                    if (self.depth < 0)
+                        c.VK_IMAGE_VIEW_TYPE_2D_ARRAY
+                    else
+                        c.VK_IMAGE_VIEW_TYPE_2D
+                else
+                    if (self.depth < 0)
+                        c.VK_IMAGE_VIEW_TYPE_1D_ARRAY
+                    else
+                        c.VK_IMAGE_VIEW_TYPE_1D;
+        }
+
+        pub fn imageUsage(self: *const @This()) c.VkImageUsageFlags {
+            var imgUsage: c.VkImageUsageFlags = 0;
+            if (self.usage.HasAny(.TransferSrc))
+                imgUsage |= c.VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            if (self.usage.HasAny(.TransferDst))
+                imgUsage |= c.VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            if (self.usage.HasAny(.HostAccess))
+                imgUsage |= c.VK_IMAGE_USAGE_HOST_TRANSFER_BIT;
+            if (self.usage.HasAny(.ShaderRead))
+                imgUsage |= c.VK_IMAGE_USAGE_SAMPLED_BIT;
+            if (self.usage.HasAny(.ShaderWrite))
+                imgUsage |= c.VK_IMAGE_USAGE_STORAGE_BIT;
+            if (self.usage.HasAny(.RenderWrite))
+                imgUsage |= 
+                    if (isDepthStencilFormat(self.format)) 
+                        c.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT 
+                    else 
+                        c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+            return imgUsage;
         }
     };
 
     pub const Self = @This();
-    pub fn init(gfx: *Gfx, desc: *const Descriptor) !Image {
+    pub fn init(gfx: *Gfx, desc: *const Descriptor) !Self {
         var self = Self {
-            .desc = desc,
+            .desc = desc.*,
             .gfx = gfx,
         };
 
         var allocInfo: c.VmaAllocationInfo = undefined;
+        const imageFlags: c.VkImageCreateFlags = 0;
 
-        try check( c.vmaCreateImage(
+        try check(c.vmaCreateImage(
             gfx.vma, 
             &c.VkImageCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-
+                .flags = imageFlags,
+                .imageType = desc.imageType(),
+                .format = desc.format,
+                .extent = desc.extent3D(),
+                .mipLevels = @intCast(desc.mips),
+                .arrayLayers = if (desc.depth < 0) @intCast(-desc.depth) else 1,
+                .samples = c.VK_SAMPLE_COUNT_1_BIT,
+                .tiling = if (desc.usage.HasAny(.HostAccess)) c.VK_IMAGE_TILING_LINEAR else c.VK_IMAGE_TILING_OPTIMAL,
+                .usage = desc.imageUsage(),
+                .sharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
+                .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
             },
             &c.VmaAllocationCreateInfo{
                 .flags = getVmaAllocationCreateFlags(desc.usage),
@@ -878,7 +960,12 @@ pub const Image = struct {
 
         self.hostAddress = @ptrCast(allocInfo.pMappedData);
 
-        self.view = try gfx.createImageView(.{ .image = self.handle, .format = desc.format });
+        self.view = try gfx.createImageView(.{ 
+            .image = self.handle, 
+            .flags = imageFlags,
+            .format = desc.format,
+            .viewType = desc.imageViewType(),
+        });
 
         return self;
     }
@@ -886,7 +973,11 @@ pub const Image = struct {
     pub fn initExisting(gfx: *Gfx, desc: *const Descriptor, image: c.VkImage) !Image {
         const self= Self {
             .handle = image,
-            .view = try gfx.createImageView(.{ .image = image, .format = desc.format }),
+            .view = try gfx.createImageView(.{ 
+                .image = image, 
+                .format = desc.format,
+                .viewType = desc.imageViewType(),
+            }),
             .desc = desc.*,
             .gfx = gfx,
         };
@@ -898,6 +989,37 @@ pub const Image = struct {
         c.vkDestroyImageView(self.gfx.device.handle, self.view, self.gfx.allocCB);
         if (self.allocation != null)
             c.vmaDestroyImage(self.gfx.vma, self.handle, self.allocation);
+    }
+};
+
+pub const Sampler = struct {
+    handle: c.VkSampler = null,
+    desc: Descriptor,
+    gfx: *Gfx,
+
+    pub const Descriptor = struct {
+
+    };
+
+    pub const Self = @This();
+
+    pub fn init(gfx: *Gfx, desc: *const Descriptor) !Self {
+        var self = Self{
+            .desc = desc.*,
+            .gfx = gfx
+        };
+
+        try check(c.vkCreateSampler(
+            gfx.handle,
+            &c.VkSamplerCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+                
+            },
+            gfx.allocCB,
+            &self.handle
+        ));
+
+        return self;
     }
 };
 
