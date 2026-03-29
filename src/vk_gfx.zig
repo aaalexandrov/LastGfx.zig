@@ -452,6 +452,10 @@ pub const Swapchain = struct {
     capabilitiesHasValidExtent: bool = true,
 
     pub const Self = @This();
+    pub const ImageWithSemaphore = struct {
+        image: *Image, 
+        semaphore: c.VkSemaphore,
+    };
 
     pub fn init(gfx: *Gfx, window: ?*c.SDL_Window) !Self {
         var self: Self = .{ .gfx = gfx, .window = window };
@@ -468,6 +472,9 @@ pub const Swapchain = struct {
 
         var surfaceCaps: c.VkSurfaceCapabilitiesKHR = undefined;
         try check(c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(self.gfx.physical.handle, self.surface, &surfaceCaps));
+
+        if (surfaceCaps.maxImageExtent.width == 0 or surfaceCaps.maxImageExtent.height == 0)
+            return;
 
         self.capabilitiesHasValidExtent = surfaceCaps.currentExtent.width <= surfaceCaps.maxImageExtent.width and surfaceCaps.currentExtent.height <= surfaceCaps.maxImageExtent.height;
         if (!self.capabilitiesHasValidExtent)
@@ -513,6 +520,8 @@ pub const Swapchain = struct {
     }
 
     fn deinitSwapchain(self: *Self) void {
+        if (self.handle == null)
+            return;
         for (self.images, self.semaphores) |*img, sem| {
             img.deinit();
             c.vkDestroySemaphore(self.gfx.device.handle, sem, self.gfx.allocCB);
@@ -533,7 +542,13 @@ pub const Swapchain = struct {
         try self.initSwapchain();
     }
 
-    fn checkSurfaceSize(self: *Self) bool {
+    pub fn isValid(self: *Self) bool {
+        return self.handle != null;
+    }
+
+    pub fn checkSurfaceSize(self: *Self) bool {
+        if (self.handle == null)
+            return false;
         if (self.capabilitiesHasValidExtent)
             return true;
 
@@ -544,19 +559,23 @@ pub const Swapchain = struct {
         return width == self.images[0].desc.width and height == self.images[0].desc.height;
     }
 
-    pub fn acquireNextImage(self: *Self) !struct { image: *Image, semaphore: c.VkSemaphore } {
-        if (!self.checkSurfaceSize())
-            return error.vk_error_out_of_date_khr;
-
+    pub fn acquireNextImage(self: *Self) !?ImageWithSemaphore {
+        if (self.handle == null)
+            return null;
         self.semaphoreIndex = @rem(self.semaphoreIndex + 1, @as(u32, @intCast(self.semaphores.len)));
         var imgIndex: u32 = 0;
-        try check(c.vkAcquireNextImage2KHR(self.gfx.device.handle, &c.VkAcquireNextImageInfoKHR{
+        check(c.vkAcquireNextImage2KHR(self.gfx.device.handle, &c.VkAcquireNextImageInfoKHR{
             .sType = c.VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR,
             .swapchain = self.handle,
             .deviceMask = 1,
             .timeout = std.math.maxInt(u64),
             .semaphore = self.semaphores[self.semaphoreIndex],
-        }, &imgIndex));
+        }, &imgIndex)) catch |err| switch (err) {
+            error.vk_suboptimal_khr, error.vk_error_out_of_date_khr => {
+                return null;
+            },
+            else => |anotherErr| return anotherErr,
+        };
         return .{ .image = &self.images[imgIndex], .semaphore = self.semaphores[self.semaphoreIndex] };
     }
 

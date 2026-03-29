@@ -48,7 +48,11 @@ pub fn main() !void {
             }
         }
 
-        if (swapchain.acquireNextImage()) |swapImage| {
+        var swapchainImage: ?vk.Swapchain.ImageWithSemaphore = null;
+        if (swapchain.checkSurfaceSize())
+            swapchainImage = try swapchain.acquireNextImage();
+
+        if (swapchainImage) |swapImage| {
             try vk.check(c.vkResetFences(gfx.device.handle, 1, &cmds.fence));
 
             try cmds.begin();
@@ -119,11 +123,8 @@ pub fn main() !void {
             swapchain.present(swapImage.image, null) catch {};
 
             try gfx.waitIdle();
-        } else |err| switch (err) {
-            error.vk_suboptimal_khr, error.vk_error_out_of_date_khr => {
-                try swapchain.recreate();
-            },
-            else => |anotherErr| return anotherErr,
+        } else {
+            try swapchain.recreate();
         }
     }
 }
