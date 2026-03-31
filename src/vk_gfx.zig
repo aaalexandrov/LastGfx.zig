@@ -115,6 +115,7 @@ pub const Gfx = struct {
 
     pub fn deinit(self: *Self) void {
         c.vmaDestroyAllocator(self.vma);
+        self.physical.deinit(self.alloc);
         c.vkDestroyDevice(self.device.handle, self.allocCB);
 
         if (self.dbgMessenger != null) {
@@ -142,12 +143,22 @@ pub const Gfx = struct {
 
         var bestProps: ?PhysicalDevice = null;
 
-        for (devices.items) |device| {
-            const devProps = try PhysicalDevice.init(self.instance, device, self.alloc);
+        devices: for (devices.items) |device| {
+            var devProps = try PhysicalDevice.init(self.instance, device, self.alloc);
+            defer if (bestProps == null or devProps.handle != bestProps.?.handle)
+                devProps.deinit(self.alloc);
+
             if (devProps.props.properties.apiVersion < API_VERSION)
                 continue;
             if (devProps.universalQueueFamily < 0)
                 continue;
+            extensions: for (&deviceExtensions) |reqExtName| {
+                for (devProps.extensions) |*devExt| {
+                    if (std.mem.orderZ(u8, reqExtName, @ptrCast(&devExt.extensionName)) == .eq)
+                        continue :extensions;
+                }
+                continue :devices;
+            }
             if (bestProps) |best| {
                 if ((try deviceTypePriority(devProps.props.properties.deviceType)) <= (try deviceTypePriority(best.props.properties.deviceType)))
                     continue;
@@ -158,9 +169,7 @@ pub const Gfx = struct {
         return bestProps.?;
     }
 
-    fn createDevice(self: *Self) !Device {
-        var device: Device = undefined;
-        const exts = [_][*c]const u8{
+    var deviceExtensions = [_][*c]const u8{
             c.VK_KHR_SWAPCHAIN_EXTENSION_NAME,
             c.VK_EXT_MESH_SHADER_EXTENSION_NAME,
             c.VK_KHR_MAINTENANCE_4_EXTENSION_NAME,
@@ -170,6 +179,9 @@ pub const Gfx = struct {
             c.VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME,
             c.VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
         };
+
+    fn createDevice(self: *Self) !Device {
+        var device: Device = undefined;
         try check(c.vkCreateDevice(self.physical.handle, &c.VkDeviceCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
             .pNext = &c.VkPhysicalDeviceSynchronization2Features{
@@ -211,8 +223,8 @@ pub const Gfx = struct {
                 .queueCount = 1,
                 .pQueuePriorities = &[_]f32{0},
             },
-            .enabledExtensionCount = @intCast(exts.len),
-            .ppEnabledExtensionNames = &exts,
+            .enabledExtensionCount = @intCast(deviceExtensions.len),
+            .ppEnabledExtensionNames = &deviceExtensions,
         }, self.allocCB, &device.handle));
         c.vkGetDeviceQueue(device.handle, @intCast(self.physical.universalQueueFamily), 0, &device.universalQueue);
         std.debug.assert(device.universalQueue != null);
@@ -260,6 +272,7 @@ pub const Gfx = struct {
 pub const PhysicalDevice = struct {
     handle: c.VkPhysicalDevice = null,
     props: c.VkPhysicalDeviceProperties2 = .{ .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 },
+    extensions: []c.VkExtensionProperties = &.{},
     descriptorHeapProps: c.VkPhysicalDeviceDescriptorHeapPropertiesEXT = .{ .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT },
     universalQueueFamily: i32 = -1,
 
@@ -271,6 +284,11 @@ pub const PhysicalDevice = struct {
 
         phys.props.pNext = &phys.descriptorHeapProps;
         c.vkGetPhysicalDeviceProperties2(phys.handle, &phys.props);
+
+        var numExtensions: u32 = 0;
+        try check(c.vkEnumerateDeviceExtensionProperties(phys.handle, null, &numExtensions, null));
+        phys.extensions = try alloc.alloc(c.VkExtensionProperties, numExtensions);
+        try check(c.vkEnumerateDeviceExtensionProperties(phys.handle, null, &numExtensions, phys.extensions.ptr));
 
         var numQueueFamilies: u32 = 0;
         c.vkGetPhysicalDeviceQueueFamilyProperties(physDev, &numQueueFamilies, null);
@@ -288,6 +306,10 @@ pub const PhysicalDevice = struct {
         }
 
         return phys;
+    }
+
+    fn deinit(self: *Self, alloc: std.mem.Allocator) void {
+        alloc.free(self.extensions);
     }
 };
 
