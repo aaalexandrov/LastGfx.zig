@@ -12,23 +12,28 @@ fn geomRandom(comptime T: type) T {
     return @intFromFloat(@min(rnd, maxVal));
 }
 
-pub fn ZipTree(comptime T: type, comptime compareFn: anytype) type {
+pub fn ZipTreeWithKey(comptime DataType: type, comptime KeyType: type, comptime compareFn: anytype) type {
     return struct {
         root: ?*Node = null,
         numNodes: usize = 0,
         alloc: std.mem.Allocator,
 
-        pub const Data: type = T;
+        pub const Data: type = DataType;
+        pub const Key: type = KeyType;
         const Rank = u8;
 
-        pub fn compare(a: Data, b: Data) std.math.Order {
+        fn compareData(a: Data, b: Data) std.math.Order {
+            return compareFn(a, b);
+        }
+
+        fn compareKey(a: Key, b: Data) std.math.Order {
             return compareFn(a, b);
         }
 
         const Node = struct {
             data: Data,
             rank: Rank = std.math.maxInt(Rank),
-            child: [2]?*Node = .{null, null},
+            child: [2]?*Node = .{ null, null },
             parent: ?*Node = null,
 
             fn setChild(self: *@This(), comptime childIndex: u1, node: ?*Node) void {
@@ -48,7 +53,7 @@ pub fn ZipTree(comptime T: type, comptime compareFn: anytype) type {
             fn lastEqualChild(self: *@This(), comptime childIndex: u1) *Node {
                 var node = self;
                 while (node.child[childIndex]) |child| {
-                    if (compare(child.data, self.data) != .eq)
+                    if (compareData(child.data, self.data) != .eq)
                         break;
                     node = child;
                 }
@@ -126,7 +131,7 @@ pub fn ZipTree(comptime T: type, comptime compareFn: anytype) type {
 
         fn insertNode(root: ?*Node, node: *Node) *Node {
             if (root) |r| {
-                const nodeROrder = compare(node.data, r.data);
+                const nodeROrder = compareData(node.data, r.data);
                 if (nodeROrder == .lt or nodeROrder == .eq and node.rank > r.rank) {
                     if (insertNode(r.child[0], node) == node) {
                         if (node.rank < r.rank) {
@@ -154,19 +159,19 @@ pub fn ZipTree(comptime T: type, comptime compareFn: anytype) type {
             }
         }
 
-        pub fn lowerBound(self: *Self, data: Data) ?*Node {
-            return self.getBound(data, 0);
+        pub fn lowerBound(self: *Self, key: Key) ?*Node {
+            return self.getBound(key, 0);
         }
 
-        pub fn upperBound(self: *Self, data: Data) ?*Node {
-            return self.getBound(data, 1);
+        pub fn upperBound(self: *Self, key: Data) ?*Node {
+            return self.getBound(key, 1);
         }
 
-        fn getBound(self: *Self, data: Data, comptime childIndex: u1) ?*Node {
+        fn getBound(self: *Self, key: Key, comptime childIndex: u1) ?*Node {
             var prevParent: ?*Node = null;
             var curNode = self.root;
             while (curNode) |cur| {
-                const dataCurOrder = compare(data, cur.data);
+                const dataCurOrder = compareKey(key, cur.data);
                 if (dataCurOrder == .eq)
                     return cur.lastEqualChild(0);
                 if (dataCurOrder == .lt) {
@@ -179,15 +184,15 @@ pub fn ZipTree(comptime T: type, comptime compareFn: anytype) type {
                     curNode = cur.child[1];
                 }
             }
-            if (prevParent) |lesser| 
+            if (prevParent) |lesser|
                 return lesser.lastChild(1 - childIndex);
             return null;
         }
 
-        pub fn find(self: *Self, data: Data) ?*Node {
+        pub fn find(self: *Self, key: Key) ?*Node {
             var curNode = self.root;
             while (curNode) |cur| {
-                const dataCurOrder = compare(data, cur.data);
+                const dataCurOrder = compareKey(key, cur.data);
                 if (dataCurOrder == .eq)
                     return cur.lastEqualChild(0);
                 curNode = if (dataCurOrder == .lt) cur.child[0] else cur.child[1];
@@ -203,8 +208,8 @@ pub fn ZipTree(comptime T: type, comptime compareFn: anytype) type {
             return Node.lastChild(self.root, 1);
         }
 
-        pub fn erase(self: *Self, data: Data) bool {
-            const node = self.find(data);
+        pub fn erase(self: *Self, key: Key) bool {
+            const node = self.find(key);
             if (node) |n| {
                 self.delete(n);
                 return true;
@@ -235,7 +240,7 @@ pub fn ZipTree(comptime T: type, comptime compareFn: anytype) type {
         fn deleteNode(node: *Node, root: *Node) ?*Node {
             if (node == root)
                 return zipNodes(root.child[0], root.child[1]);
-            if (compare(node.data, root.data) == .lt) {
+            if (compareData(node.data, root.data) == .lt) {
                 if (node == root.child[0]) {
                     root.setChild(0, zipNodes(root.child[0].?.child[0], root.child[0].?.child[1]));
                 } else {
@@ -261,14 +266,14 @@ pub fn ZipTree(comptime T: type, comptime compareFn: anytype) type {
             if (n.child[0]) |l| {
                 const sameChildren = n.child[0] == n.child[1];
                 const badParent = l.parent != n;
-                if (sameChildren or badParent or compare(l.data, n.data).compare(.gte) or l.rank >= n.rank or !validateNode(l)) {
+                if (sameChildren or badParent or compareData(l.data, n.data).compare(.gte) or l.rank >= n.rank or !validateNode(l)) {
                     std.log.info("failed left, n.data = {}, n.rank = {}, l.data = {}, l.rank = {}, bad parent = {}, same children = {}", .{ n.data, n.rank, l.data, l.rank, badParent, sameChildren });
                     return false;
                 }
             }
             if (n.child[1]) |r| {
                 const badParent = r.parent != n;
-                if (badParent or compare(r.data, n.data) == .lt or r.rank > n.rank or !validateNode(r)) {
+                if (badParent or compareData(r.data, n.data) == .lt or r.rank > n.rank or !validateNode(r)) {
                     std.log.info("failed right, n.data = {}, n.rank = {}, r.data = {}, r.rank = {}, bad parent = {}", .{ n.data, n.rank, r.data, r.rank, badParent });
                     return false;
                 }
@@ -286,6 +291,29 @@ pub fn ZipTree(comptime T: type, comptime compareFn: anytype) type {
             return 0;
         }
     };
+}
+
+pub fn ZipTree(comptime DataType: type, comptime compareFn: anytype) type {
+    return ZipTreeWithKey(DataType, DataType, compareFn);
+}
+
+pub fn ZipTreeKV(comptime KeyType: type, comptime ValueType: type, comptime compareKeysFn: anytype) type {
+    const KeyValue = struct {
+        key: Key,
+        value: Value,
+
+        pub const Key: type = KeyType;
+        pub const Value: type = ValueType;
+        const Self = @This();
+        pub fn compareFn(keyOrKeyValue: anytype, keyValue: Self) std.math.Order {
+            if (@TypeOf(keyOrKeyValue) == Self)
+                return compareKeysFn(keyOrKeyValue.key, keyValue.key);
+            if (@TypeOf(keyOrKeyValue) == Key)
+                return compareKeysFn(keyOrKeyValue, keyValue.key);
+        }
+    };
+
+    return ZipTreeWithKey(KeyValue, KeyType, KeyValue.compareFn);
 }
 
 pub fn ZipTest(alloc: std.mem.Allocator) !void {
@@ -333,8 +361,8 @@ pub fn ZipTest(alloc: std.mem.Allocator) !void {
 
     std.mem.sort(Zip.Data, valueArr.items, {}, comptime std.sort.asc(Zip.Data));
 
-    const n63 = zip.find(63);
-    try std.testing.expect(n63 != null);
+    const n63 = zip.find(63).?;
+    try std.testing.expect(n63.data == 63);
 
     var node = zip.first();
     var count: u32 = 0;
@@ -377,6 +405,16 @@ pub fn ZipTest(alloc: std.mem.Allocator) !void {
     }
 
     try std.testing.expect(!zip.erase(-1));
+
+    const Dict = ZipTreeKV(i32, []const u8, std.math.order);
+    var dict = Dict.init(alloc);
+    defer dict.deinit();
+
+    try dict.insert(.{ .key = 5, .value = "five" });
+    const found = dict.find(5).?;
+    try std.testing.expect(std.mem.eql(u8, found.data.value, "five"));
+    try std.testing.expect(dict.erase(5));
+    try std.testing.expectEqual(dict.size(), 0);
 }
 
 test "ZipTree" {
