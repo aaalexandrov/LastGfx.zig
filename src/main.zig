@@ -8,6 +8,8 @@ pub fn main() !void {
         @panic("Leaked memory detected on exit!");
     };
 
+    //try @import("zip_tree.zig").ZipTest(gpa.allocator());
+
     try errify(c.SDL_Init(c.SDL_INIT_VIDEO));
     defer c.SDL_Quit();
 
@@ -30,29 +32,44 @@ pub fn main() !void {
     var pipeline = try vk.Pipeline.initGraphics(&gfx, &shaderMesh, &shaderFrag, "triangle");
     defer pipeline.deinit(&gfx);
 
-    var buffer = try vk.Buffer.init(
-        &gfx, 
-        &.{ 
-            .size = 1024, 
-            .usage = vk.Usage.ShaderRead.Or(.HostAccess),
-        }, 
-        16);
+    var resourceHeap = try vk.DescriptorHeap.init(&gfx, .Resource, 16);
+    defer resourceHeap.deinit();
+
+    var samplerHeap = try vk.DescriptorHeap.init(&gfx, .Sampler, 16);
+    defer samplerHeap.deinit();
+
+    try samplerHeap.writeSamplerDescriptors(0, &[_]c.VkSamplerCreateInfo{vk.Sampler.createInfo(&.{})});
+
+    var buffer = try vk.Buffer.init(&gfx, &.{
+        .size = 1024,
+        .usage = vk.Usage.ShaderRead.Or(.HostAccess),
+    }, 16);
     defer buffer.deinit();
 
-    var image = try vk.Image.init(
-        &gfx, 
-        &.{ 
-            .format = c.VK_FORMAT_R8G8B8A8_UNORM,
-            .width = 64,
-            .height = 64,
-        });
+    var image = try vk.Image.init(&gfx, &.{
+        .format = c.VK_FORMAT_R8G8B8A8_UNORM,
+        .width = 64,
+        .height = 64,
+    });
     defer image.deinit();
 
     var linearSampler = try vk.Sampler.init(&gfx, &.{});
     defer linearSampler.deinit();
 
+    try resourceHeap.writeResourceDescriptors(0, &[_]vk.ResourcePtr{
+        .{.buffer = &buffer},
+        .{.image = &image},
+    });
+
     var cmds = try vk.Commands.init(&gfx);
     defer cmds.deinit();
+
+    try cmds.begin();
+    cmds.updateDescriptorHeap(&samplerHeap);
+    cmds.updateDescriptorHeap(&resourceHeap);
+    try cmds.end();
+    try cmds.submit(null);
+    try gfx.waitIdle();
 
     var running = true;
     var event = std.mem.zeroes(c.SDL_Event);
@@ -74,6 +91,9 @@ pub fn main() !void {
             try vk.check(c.vkResetFences(gfx.device.handle, 1, &cmds.fence));
 
             try cmds.begin();
+
+            cmds.bindDescriptorHeap(&samplerHeap);
+            cmds.bindDescriptorHeap(&resourceHeap);
 
             c.vkCmdPipelineBarrier2(cmds.handle, &c.VkDependencyInfo{
                 .sType = c.VK_STRUCTURE_TYPE_DEPENDENCY_INFO,

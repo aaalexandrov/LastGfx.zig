@@ -32,6 +32,10 @@ pub const Gfx = struct {
     swapchainColorspace: c.VkColorSpaceKHR,
     cmdDrawMeshTasksEXT: c.PFN_vkCmdDrawMeshTasksEXT = null,
     cmdPushDataEXT: c.PFN_vkCmdPushDataEXT = null,
+    cmdBindSamplerHeapEXT: c.PFN_vkCmdBindSamplerHeapEXT = null,
+    cmdBindResourceHeapEXT: c.PFN_vkCmdBindResourceHeapEXT = null,
+    writeResourceDescriptorsEXT: c.PFN_vkWriteResourceDescriptorsEXT = null,
+    writeSamplerDescriptorsEXT: c.PFN_vkWriteSamplerDescriptorsEXT = null,
     vma: c.VmaAllocator = null,
 
     pub const API_VERSION = c.VK_API_VERSION_1_4;
@@ -103,7 +107,7 @@ pub const Gfx = struct {
         self.swapchainColorspace = c.VK_COLORSPACE_SRGB_NONLINEAR_KHR;
 
         try check(c.vmaCreateAllocator(&c.VmaAllocatorCreateInfo{
-            .flags = c.VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE4_BIT | c.VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE5_BIT,
+            .flags = c.VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE4_BIT | c.VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE5_BIT | c.VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT,
             .instance = self.instance,
             .physicalDevice = self.physical.handle,
             .device = self.device.handle,
@@ -231,37 +235,23 @@ pub const Gfx = struct {
 
         self.cmdDrawMeshTasksEXT = @ptrCast(c.vkGetDeviceProcAddr(device.handle, "vkCmdDrawMeshTasksEXT"));
         std.debug.assert(self.cmdDrawMeshTasksEXT != null);
+
         self.cmdPushDataEXT = @ptrCast(c.vkGetDeviceProcAddr(device.handle, "vkCmdPushDataEXT"));
         std.debug.assert(self.cmdPushDataEXT != null);
 
-        return device;
-    }
+        self.cmdBindSamplerHeapEXT = @ptrCast(c.vkGetDeviceProcAddr(device.handle, "vkCmdBindSamplerHeapEXT"));
+        std.debug.assert(self.cmdBindSamplerHeapEXT != null);
 
-    const ImageViewOpts = struct {
-        image: c.VkImage,
-        format: c.VkFormat,
-        flags: c.VkImageViewCreateFlags = 0,
-        viewType: c.VkImageViewType = c.VK_IMAGE_VIEW_TYPE_2D,
-        components: c.VkComponentMapping = .{
-            .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-            .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-            .b = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-            .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-        },
-        subresourceRange: c.VkImageSubresourceRange = wholeImage(c.VK_IMAGE_ASPECT_COLOR_BIT),
-    };
-    fn createImageView(self: *Self, opts: ImageViewOpts) !c.VkImageView {
-        var view: c.VkImageView = null;
-        try check(c.vkCreateImageView(self.device.handle, &c.VkImageViewCreateInfo{
-            .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .flags = opts.flags,
-            .image = opts.image,
-            .viewType = opts.viewType,
-            .format = opts.format,
-            .components = opts.components,
-            .subresourceRange = opts.subresourceRange,
-        }, self.allocCB, &view));
-        return view;
+        self.cmdBindResourceHeapEXT = @ptrCast(c.vkGetDeviceProcAddr(device.handle, "vkCmdBindResourceHeapEXT"));
+        std.debug.assert(self.cmdBindResourceHeapEXT != null);
+
+        self.writeResourceDescriptorsEXT = @ptrCast(c.vkGetDeviceProcAddr(device.handle, "vkWriteResourceDescriptorsEXT"));
+        std.debug.assert(self.writeResourceDescriptorsEXT != null);
+
+        self.writeSamplerDescriptorsEXT = @ptrCast(c.vkGetDeviceProcAddr(device.handle, "vkWriteSamplerDescriptorsEXT"));
+        std.debug.assert(self.writeSamplerDescriptorsEXT != null);
+
+        return device;
     }
 
     pub fn waitIdle(self: *Self) !void {
@@ -374,6 +364,30 @@ pub const Commands = struct {
         }));
     }
 
+    pub fn bindDescriptorHeap(self: *Self, descHeap: *const DescriptorHeap) void {
+        const bindInfo = c.VkBindHeapInfoEXT{
+            .sType = c.VK_STRUCTURE_TYPE_BIND_HEAP_INFO_EXT,
+            .reservedRangeOffset = 0,
+            .reservedRangeSize = descHeap.reservedSize,
+            .heapRange = .{.address = descHeap.deviceBuffer.deviceAddress, .size = descHeap.deviceBuffer.desc.size},
+        };
+        switch (descHeap.kind) {
+            .Sampler => self.gfx.cmdBindSamplerHeapEXT.?(self.handle, &bindInfo),
+            .Resource => self.gfx.cmdBindResourceHeapEXT.?(self.handle, &bindInfo),
+        }
+    }
+
+    pub fn updateDescriptorHeap(self: *Self, descHeap: *const DescriptorHeap) void {
+        self.copyBuffer(&descHeap.cpuBuffer, &descHeap.deviceBuffer, &[_]c.VkBufferCopy2{
+            .{
+                .sType = c.VK_STRUCTURE_TYPE_BUFFER_COPY_2,
+                .srcOffset = descHeap.reservedSize,
+                .dstOffset = descHeap.reservedSize,
+                .size = descHeap.deviceBuffer.desc.size - descHeap.reservedSize,
+            },
+        });
+    }
+
     pub fn renderBegin(self: *Self, colorTargets: []const RenderTarget, depthStencilTarget: ?RenderTarget) !void {
         var colorAttachments = try std.ArrayList(c.VkRenderingAttachmentInfo).initCapacity(self.gfx.alloc, colorTargets.len);
         defer colorAttachments.deinit(self.gfx.alloc);
@@ -438,6 +452,16 @@ pub const Commands = struct {
 
     pub fn end(self: *Self) !void {
         try check(c.vkEndCommandBuffer(self.handle));
+    }
+
+    pub fn copyBuffer(self: *Self, srcBuffer: *const Buffer, dstBuffer: *const Buffer, regions: []const c.VkBufferCopy2) void {
+        c.vkCmdCopyBuffer2(self.handle, &c.VkCopyBufferInfo2{
+            .sType = c.VK_STRUCTURE_TYPE_COPY_BUFFER_INFO_2,
+            .srcBuffer = srcBuffer.handle,
+            .dstBuffer = dstBuffer.handle,
+            .regionCount = @intCast(regions.len),
+            .pRegions = regions.ptr,
+        });
     }
 
     pub fn submit(self: *Self, waitSemaphore: c.VkSemaphore) !void {
@@ -736,7 +760,7 @@ pub const Pipeline = struct {
         var self = Self{};
         try check(c.vkCreateComputePipelines(gfx.device.handle, null, 1, &c.VkComputePipelineCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-            .flags = c.VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
+            .flags = c.VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT,
             .layout = gfx.pipelineLayout.handle,
             .stage = c.VkPipelineShaderStageCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -798,7 +822,7 @@ fn getVmaAllocationCreateFlags(usage: Usage) c.VmaAllocationCreateFlags {
 pub const Buffer = struct {
     handle: c.VkBuffer = null,
     allocation: c.VmaAllocation = null,
-    gpuAddress: c.VkDeviceMemory = null,
+    deviceAddress: c.VkDeviceAddress = 0,
     hostAddress: ?[*]u8 = null,
     desc: Descriptor,
     gfx: *Gfx,
@@ -808,8 +832,8 @@ pub const Buffer = struct {
         usage: Usage = Usage.ShaderRead.Or(.TransferDst),
 
         pub fn bufferUsage(self: *const @This()) c.VkBufferUsageFlags2 {
-            var bufUsage: c.VkBufferUsageFlags2 = 
-            if (self.usage == .DescriptorHeap) 
+            var bufUsage: c.VkBufferUsageFlags2 = c.VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT |
+            if (self.usage.HasAny(.DescriptorHeap)) 
                 c.VK_BUFFER_USAGE_2_DESCRIPTOR_HEAP_BIT_EXT 
             else 
                 c.VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT;
@@ -831,6 +855,7 @@ pub const Buffer = struct {
 
         var allocInfo: c.VmaAllocationInfo = undefined;
 
+        const bufferUsage = desc.bufferUsage();
         try check(c.vmaCreateBufferWithAlignment(
             gfx.vma, 
             &c.VkBufferCreateInfo{
@@ -838,7 +863,7 @@ pub const Buffer = struct {
                 .size = desc.size,
                 .pNext = &c.VkBufferUsageFlags2CreateInfo {
                     .sType = c.VK_STRUCTURE_TYPE_BUFFER_USAGE_FLAGS_2_CREATE_INFO,
-                    .usage = desc.bufferUsage(),
+                    .usage = bufferUsage,
                 },
             }, 
             &c.VmaAllocationCreateInfo{
@@ -851,7 +876,13 @@ pub const Buffer = struct {
             &allocInfo
         ));
 
-        self.gpuAddress = @ptrFromInt(@as(u64, @intFromPtr(allocInfo.deviceMemory)) + allocInfo.offset);
+        if ((bufferUsage & c.VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT) != 0) {
+            self.deviceAddress = c.vkGetBufferDeviceAddress(gfx.device.handle, &c.VkBufferDeviceAddressInfo{
+                .sType = c.VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+                .buffer = self.handle,
+            });
+            std.debug.assert(self.deviceAddress != 0);
+        }
         self.hostAddress = @ptrCast(allocInfo.pMappedData);
 
         return self;
@@ -859,6 +890,22 @@ pub const Buffer = struct {
 
     pub fn deinit(self: *Self) void {
         c.vmaDestroyBuffer(self.gfx.vma, self.handle, self.allocation);
+    }
+
+    pub fn getDeviceAddressRange(self: *const Self) c.VkDeviceAddressRangeEXT {
+        return .{
+            .address = self.deviceAddress,
+            .size = self.desc.size,
+        };
+    }
+
+    fn writeDescriptorData(self: *const Self, resourceData: *DescriptorHeap.ResourceData, descInfo: *c.VkResourceDescriptorInfoEXT) void {
+        resourceData.* = .{.buffer = self.getDeviceAddressRange()};
+        descInfo.* = .{
+            .sType = c.VK_STRUCTURE_TYPE_RESOURCE_DESCRIPTOR_INFO_EXT,
+            .type = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .data = .{.pAddressRange = &resourceData.buffer},
+        };
     }
 };
 
@@ -870,6 +917,16 @@ pub fn isDepthStencilFormat(format: c.VkFormat) bool {
         c.VK_FORMAT_D32_SFLOAT,
         c.VK_FORMAT_D32_SFLOAT_S8_UINT,
         c.VK_FORMAT_X8_D24_UNORM_PACK32 => true,
+        else => false,
+    };
+}
+
+pub fn isStencilFormat(format: c.VkFormat) bool {
+    return switch (format) {
+        c.VK_FORMAT_S8_UINT,
+        c.VK_FORMAT_D16_UNORM_S8_UINT,
+        c.VK_FORMAT_D24_UNORM_S8_UINT,
+        c.VK_FORMAT_D32_SFLOAT_S8_UINT => true,
         else => false,
     };
 }
@@ -943,6 +1000,45 @@ pub const Image = struct {
                         c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
             return imgUsage;
         }
+
+        pub fn imageAspect(self: *const @This()) c.VkImageAspectFlags {
+            return 
+                if (isDepthStencilFormat(self.format))
+                    c.VK_IMAGE_ASPECT_DEPTH_BIT
+                else if (isStencilFormat(self.format))
+                    c.VK_IMAGE_ASPECT_STENCIL_BIT
+                else 
+                    c.VK_IMAGE_ASPECT_COLOR_BIT;
+        }
+
+        pub fn descriptorType(self: *const @This()) c.VkDescriptorType {
+            return 
+                if (self.usage.HasAny(.ShaderRead))
+                    c.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE
+                else if (self.usage.HasAny(.ShaderWrite))
+                    c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+                else if (self.usage.HasAny(.RenderWrite))
+                    c.VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT
+                else
+                    unreachable;
+        }
+
+        pub fn viewCreateInfo(self: *const @This(), image: c.VkImage) c.VkImageViewCreateInfo {
+            return .{
+                .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .flags = 0,
+                .image = image,
+                .viewType = self.imageViewType(),
+                .format = self.format,
+                .components = .{
+                    .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .b = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                },
+                .subresourceRange = wholeImage(self.imageAspect()),
+            };
+        }
     };
 
     pub const Self = @This();
@@ -982,35 +1078,52 @@ pub const Image = struct {
 
         self.hostAddress = @ptrCast(allocInfo.pMappedData);
 
-        self.view = try gfx.createImageView(.{ 
-            .image = self.handle, 
-            .flags = imageFlags,
-            .format = desc.format,
-            .viewType = desc.imageViewType(),
-        });
+        if (desc.usage.HasAny(.RenderWrite))
+            try check(c.vkCreateImageView(gfx.device.handle, &desc.viewCreateInfo(self.handle), gfx.allocCB, &self.view));
 
         return self;
     }
 
     pub fn initExisting(gfx: *Gfx, desc: *const Descriptor, image: c.VkImage) !Image {
-        const self= Self {
+        var self= Self {
             .handle = image,
-            .view = try gfx.createImageView(.{ 
-                .image = image, 
-                .format = desc.format,
-                .viewType = desc.imageViewType(),
-            }),
             .desc = desc.*,
             .gfx = gfx,
         };
+
+        if (desc.usage.HasAny(.RenderWrite))
+            try check(c.vkCreateImageView(gfx.device.handle, &desc.viewCreateInfo(self.handle), gfx.allocCB, &self.view));
 
         return self;
     }
 
     pub fn deinit(self: *Self) void {
-        c.vkDestroyImageView(self.gfx.device.handle, self.view, self.gfx.allocCB);
+        if (self.view != null)
+            c.vkDestroyImageView(self.gfx.device.handle, self.view, self.gfx.allocCB);
         if (self.allocation != null)
             c.vmaDestroyImage(self.gfx.vma, self.handle, self.allocation);
+    }
+
+    pub fn viewCreateInfo(self: *const Self) c.VkImageViewCreateInfo {
+        return self.desc.viewCreateInfo(self.handle);
+    }
+
+    fn writeDescriptorData(self: *const Self, resourceData: *DescriptorHeap.ResourceData, descInfo: *c.VkResourceDescriptorInfoEXT) void {
+        resourceData.* = .{
+            .image = .{
+                .viewCreateInfo = self.viewCreateInfo(),
+                .descInfo = .{
+                    .sType = c.VK_STRUCTURE_TYPE_IMAGE_DESCRIPTOR_INFO_EXT,
+                    .pView = &resourceData.image.viewCreateInfo,
+                    .layout = c.VK_IMAGE_LAYOUT_GENERAL,
+                },
+            },
+        };
+        descInfo.* = .{
+            .sType = c.VK_STRUCTURE_TYPE_RESOURCE_DESCRIPTOR_INFO_EXT,
+            .type = self.desc.descriptorType(),
+            .data = .{.pImage = &resourceData.image.descInfo},
+        };
     }
 };
 
@@ -1037,7 +1150,20 @@ pub const Sampler = struct {
 
         try check(c.vkCreateSampler(
             gfx.device.handle,
-            &c.VkSamplerCreateInfo{
+            &createInfo(desc),
+            gfx.allocCB,
+            &self.handle
+        ));
+
+        return self;
+    }
+
+    pub fn deinit(self: *Self) void {
+        c.vkDestroySampler(self.gfx.device.handle, self.handle, self.gfx.allocCB);
+    }
+
+    pub fn createInfo(desc: *const Descriptor) c.VkSamplerCreateInfo {
+        return .{
                 .sType = c.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
                 .flags = 0,
                 .magFilter = desc.magFilter,
@@ -1050,16 +1176,141 @@ pub const Sampler = struct {
                 .maxAnisotropy = desc.maxAnisotropy,
                 .minLod = 0,
                 .maxLod = c.VK_LOD_CLAMP_NONE,
+            };
+    }
+};
+
+pub const ResourcePtr = union(enum) {
+    none: void,
+    buffer: *Buffer,
+    image: *Image,
+};
+
+fn alignToPowerOf2(x: anytype) @TypeOf(x) {
+    const T = @TypeOf(x);
+    return @as(T, @intCast(1)) << @intCast(@bitSizeOf(T) - @clz(x - 1));
+}
+
+pub const DescriptorHeap = struct {
+    deviceBuffer: Buffer,
+    cpuBuffer: Buffer,
+    kind: Kind,
+    maxDescriptorSize: u64,
+    reservedSize: u64,
+
+    pub const Kind = enum {
+        Sampler,
+        Resource,
+    };
+
+    const Self = @This();
+
+    pub fn init(gfx: *Gfx, kind: Kind, numDescriptors: u64) !Self {
+        var maxHeapSize: u64 = undefined;
+        var maxDescriptorSize: u64 = undefined;
+        var reservedSize: u64 = undefined;
+        var maxDescriptorAlignment: u64 = undefined;
+        switch (kind) {
+            .Sampler => {
+                maxDescriptorSize = gfx.physical.descriptorHeapProps.samplerDescriptorSize;
+                maxDescriptorAlignment = gfx.physical.descriptorHeapProps.samplerDescriptorAlignment;
+                reservedSize = gfx.physical.descriptorHeapProps.minSamplerHeapReservedRange;
+                maxHeapSize = gfx.physical.descriptorHeapProps.maxSamplerHeapSize;
             },
-            gfx.allocCB,
-            &self.handle
-        ));
+            .Resource => {
+                maxDescriptorSize = @max(gfx.physical.descriptorHeapProps.bufferDescriptorSize, gfx.physical.descriptorHeapProps.imageDescriptorSize);
+                maxDescriptorAlignment = @max(gfx.physical.descriptorHeapProps.bufferDescriptorAlignment, gfx.physical.descriptorHeapProps.imageDescriptorAlignment);
+                reservedSize = gfx.physical.descriptorHeapProps.minResourceHeapReservedRange;
+                maxHeapSize = gfx.physical.descriptorHeapProps.maxResourceHeapSize;
+            },
+        }
+
+        maxDescriptorSize = alignToPowerOf2(maxDescriptorSize);
+        std.debug.assert(reservedSize % maxDescriptorSize == 0);
+        const bufferSize = @min(reservedSize + maxDescriptorSize * numDescriptors, maxHeapSize);
+
+        const self = Self{
+            .deviceBuffer = try Buffer.init(gfx, &.{
+                .size = bufferSize,
+                .usage = Usage.DescriptorHeap.Or(.ShaderRead).Or(.ShaderWrite).Or(.TransferDst),
+            }, maxDescriptorAlignment),
+            .cpuBuffer = try Buffer.init(gfx, &.{
+                .size = bufferSize,
+                .usage = Usage.HostAccess.Or(.TransferSrc),
+            }, 0),
+            .kind = kind,
+            .maxDescriptorSize = maxDescriptorSize,
+            .reservedSize = reservedSize,
+        };
 
         return self;
     }
 
     pub fn deinit(self: *Self) void {
-        c.vkDestroySampler(self.gfx.device.handle, self.handle, self.gfx.allocCB);
+        self.deviceBuffer.deinit();
+        self.cpuBuffer.deinit();
+    }
+
+    pub fn getNumDescriptors(self: *const Self) u64 {
+        return (self.deviceBuffer.desc.size - self.reservedSize) / self.maxDescriptorSize;
+    }
+
+    fn getDescriptorHostAddressRange(self: *const Self, start: u64, num: u64) c.VkHostAddressRangeEXT {
+        std.debug.assert(start + num <= self.getNumDescriptors());
+        return .{ 
+            .address = &self.cpuBuffer.hostAddress.?[self.reservedSize + start * self.maxDescriptorSize], 
+            .size = num * self.maxDescriptorSize 
+        };
+    }
+
+    pub fn writeSamplerDescriptors(self: *Self, startIndex: u64, samplerInfos: []const c.VkSamplerCreateInfo) !void {
+        std.debug.assert(self.kind == .Sampler);
+
+        const gfx = self.deviceBuffer.gfx;
+
+        var hostAddresses = try gfx.alloc.alloc(c.VkHostAddressRangeEXT, samplerInfos.len);
+        defer gfx.alloc.free(hostAddresses);
+        for (0..samplerInfos.len) |i| 
+            hostAddresses[i] = self.getDescriptorHostAddressRange(startIndex + i, 1);
+
+        try check(gfx.writeSamplerDescriptorsEXT.?(gfx.device.handle, @intCast(samplerInfos.len), samplerInfos.ptr, hostAddresses.ptr));
+    }
+
+    const ResourceData = union(enum) {
+        image: struct {
+            viewCreateInfo: c.VkImageViewCreateInfo,
+            descInfo: c.VkImageDescriptorInfoEXT,
+        },
+        buffer: c.VkDeviceAddressRangeEXT,
+    };
+
+    pub fn writeResourceDescriptors(self: *Self, startIndex: u64, resources: []const ResourcePtr) !void {
+        std.debug.assert(self.kind == .Resource);
+        
+        const gfx = self.deviceBuffer.gfx;
+
+        var hostAddresses = try gfx.alloc.alloc(c.VkHostAddressRangeEXT, resources.len);
+        defer gfx.alloc.free(hostAddresses);
+
+        var resourceDescData = try gfx.alloc.alloc(ResourceData, resources.len);
+        defer gfx.alloc.free(resourceDescData);
+        var resourceDescInfos = try gfx.alloc.alloc(c.VkResourceDescriptorInfoEXT, resources.len);
+        defer gfx.alloc.free(resourceDescInfos);
+
+        for (0..resources.len) |i| {
+            hostAddresses[i] = self.getDescriptorHostAddressRange(startIndex + i, 1);
+            switch (resources[i]) {
+                .buffer => |buf| {
+                    buf.writeDescriptorData(&resourceDescData[i], &resourceDescInfos[i]);
+                },
+                .image => |img| {
+                    img.writeDescriptorData(&resourceDescData[i], &resourceDescInfos[i]);
+                },
+                else => unreachable,
+            }
+        }
+
+        try check(gfx.writeResourceDescriptorsEXT.?(gfx.device.handle, @intCast(resources.len), resourceDescInfos.ptr, hostAddresses.ptr));        
     }
 };
 
