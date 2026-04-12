@@ -317,7 +317,7 @@ pub const RenderTarget = struct {
         return .{
             .sType = c.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
             .imageView = self.image.view,
-            .imageLayout = c.VK_IMAGE_LAYOUT_GENERAL,
+            .imageLayout = self.image.layout(),
             .loadOp = if (self.clearValue) |_| c.VK_ATTACHMENT_LOAD_OP_CLEAR else c.VK_ATTACHMENT_LOAD_OP_LOAD,
             .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
             .clearValue = if (self.clearValue) |clr| clr else std.mem.zeroes(c.VkClearValue),
@@ -367,7 +367,7 @@ pub const Commands = struct {
     pub fn bindDescriptorHeap(self: *Self, descHeap: *const DescriptorHeap) void {
         const bindInfo = c.VkBindHeapInfoEXT{
             .sType = c.VK_STRUCTURE_TYPE_BIND_HEAP_INFO_EXT,
-            .reservedRangeOffset = 0,
+            .reservedRangeOffset = descHeap.deviceBuffer.desc.size - descHeap.reservedSize,
             .reservedRangeSize = descHeap.reservedSize,
             .heapRange = .{.address = descHeap.deviceBuffer.deviceAddress, .size = descHeap.deviceBuffer.desc.size},
         };
@@ -381,8 +381,8 @@ pub const Commands = struct {
         self.copyBuffer(&descHeap.cpuBuffer, &descHeap.deviceBuffer, &[_]c.VkBufferCopy2{
             .{
                 .sType = c.VK_STRUCTURE_TYPE_BUFFER_COPY_2,
-                .srcOffset = descHeap.reservedSize,
-                .dstOffset = descHeap.reservedSize,
+                .srcOffset = 0,
+                .dstOffset = 0,
                 .size = descHeap.deviceBuffer.desc.size - descHeap.reservedSize,
             },
         });
@@ -458,6 +458,40 @@ pub const Commands = struct {
         c.vkCmdCopyBuffer2(self.handle, &c.VkCopyBufferInfo2{
             .sType = c.VK_STRUCTURE_TYPE_COPY_BUFFER_INFO_2,
             .srcBuffer = srcBuffer.handle,
+            .dstBuffer = dstBuffer.handle,
+            .regionCount = @intCast(regions.len),
+            .pRegions = regions.ptr,
+        });
+    }
+
+    pub fn copyImage(self: *Self, srcImage: *const Image, dstImage: *const Image, regions: []const c.VkImageCopy2) void {
+        c.vkCmdCopyImage2(self.handle, &c.VkCopyImageInfo2{
+            .sType = c.VK_STRUCTURE_TYPE_COPY_IMAGE_INFO_2,
+            .srcImage = srcImage.handle,
+            .srcImageLayout = srcImage.layout(),
+            .dstImage = dstImage.handle,
+            .dstImageLayout = dstImage.layout(),
+            .regionCount = @intCast(regions.len),
+            .pRegions = regions.ptr,
+        });
+    }
+
+    pub fn copyBufferToImage(self: *Self, srcBuffer: *const Buffer, dstImage: *const Image, regions: []const c.VkBufferImageCopy2) void {
+        c.vkCmdCopyBufferToImage2(self.handle, &c.VkCopyBufferToImageInfo2{
+            .sType = c.VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2,
+            .srcBuffer = srcBuffer.handle,
+            .dstImage = dstImage.handle,
+            .dstImageLayout = dstImage.layout(),
+            .regionCount = @intCast(regions.len),
+            .pRegions = regions.ptr,
+        });
+    }
+
+    pub fn copyImageToBuffer(self: *Self, srcImage: *const Image, dstBuffer: *const Buffer, regions: []const c.VkBufferImageCopy2) void {
+        c.vkCmdCopyImageToBuffer2(self.handle, &c.VkCopyImageToBufferInfo2{
+            .sType = c.VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2,
+            .srcImage = srcImage.handle,
+            .srcImageLayout = srcImage.layout(),
             .dstBuffer = dstBuffer.handle,
             .regionCount = @intCast(regions.len),
             .pRegions = regions.ptr,
@@ -1104,6 +1138,11 @@ pub const Image = struct {
             c.vmaDestroyImage(self.gfx.vma, self.handle, self.allocation);
     }
 
+    pub fn layout(self: *const Self) c.VkImageLayout {
+        _ = self;
+        return c.VK_IMAGE_LAYOUT_GENERAL;
+    }
+
     pub fn viewCreateInfo(self: *const Self) c.VkImageViewCreateInfo {
         return self.desc.viewCreateInfo(self.handle);
     }
@@ -1115,7 +1154,7 @@ pub const Image = struct {
                 .descInfo = .{
                     .sType = c.VK_STRUCTURE_TYPE_IMAGE_DESCRIPTOR_INFO_EXT,
                     .pView = &resourceData.image.viewCreateInfo,
-                    .layout = c.VK_IMAGE_LAYOUT_GENERAL,
+                    .layout = self.layout(),
                 },
             },
         };
@@ -1191,12 +1230,18 @@ fn alignToPowerOf2(x: anytype) @TypeOf(x) {
     return @as(T, @intCast(1)) << @intCast(@bitSizeOf(T) - @clz(x - 1));
 }
 
+fn isPowerOf2(x: anytype) bool {
+    return (x & (x - 1)) == 0;
+}
+
 pub const DescriptorHeap = struct {
     deviceBuffer: Buffer,
     cpuBuffer: Buffer,
     kind: Kind,
     maxDescriptorSize: u64,
     reservedSize: u64,
+    bufferDescriptorsPerSlot: u32,
+    imageDescriptorsPerSlot: u32,
 
     pub const Kind = enum {
         Sampler,
@@ -1225,7 +1270,8 @@ pub const DescriptorHeap = struct {
             },
         }
 
-        maxDescriptorSize = alignToPowerOf2(maxDescriptorSize);
+        std.debug.assert(isPowerOf2(maxDescriptorSize));
+        std.debug.assert(isPowerOf2(maxDescriptorAlignment));
         std.debug.assert(reservedSize % maxDescriptorSize == 0);
         const bufferSize = @min(reservedSize + maxDescriptorSize * numDescriptors, maxHeapSize);
 
@@ -1241,6 +1287,8 @@ pub const DescriptorHeap = struct {
             .kind = kind,
             .maxDescriptorSize = maxDescriptorSize,
             .reservedSize = reservedSize,
+            .bufferDescriptorsPerSlot = if (kind == .Resource) @intCast(maxDescriptorSize / gfx.physical.descriptorHeapProps.bufferDescriptorSize) else 0,
+            .imageDescriptorsPerSlot = if (kind == .Resource) @intCast(maxDescriptorSize / gfx.physical.descriptorHeapProps.imageDescriptorSize) else 0,
         };
 
         return self;
@@ -1251,14 +1299,14 @@ pub const DescriptorHeap = struct {
         self.cpuBuffer.deinit();
     }
 
-    pub fn getNumDescriptors(self: *const Self) u64 {
+    pub fn getNumSlots(self: *const Self) u64 {
         return (self.deviceBuffer.desc.size - self.reservedSize) / self.maxDescriptorSize;
     }
 
     fn getDescriptorHostAddressRange(self: *const Self, start: u64, num: u64) c.VkHostAddressRangeEXT {
-        std.debug.assert(start + num <= self.getNumDescriptors());
+        std.debug.assert(start + num <= self.getNumSlots());
         return .{ 
-            .address = &self.cpuBuffer.hostAddress.?[self.reservedSize + start * self.maxDescriptorSize], 
+            .address = &self.cpuBuffer.hostAddress.?[start * self.maxDescriptorSize], 
             .size = num * self.maxDescriptorSize 
         };
     }
@@ -1284,7 +1332,7 @@ pub const DescriptorHeap = struct {
         buffer: c.VkDeviceAddressRangeEXT,
     };
 
-    pub fn writeResourceDescriptors(self: *Self, startIndex: u64, resources: []const ResourcePtr) !void {
+    pub fn writeResourceDescriptors(self: *Self, startSlot: u64, resources: []const ResourcePtr) !void {
         std.debug.assert(self.kind == .Resource);
         
         const gfx = self.deviceBuffer.gfx;
@@ -1298,7 +1346,7 @@ pub const DescriptorHeap = struct {
         defer gfx.alloc.free(resourceDescInfos);
 
         for (0..resources.len) |i| {
-            hostAddresses[i] = self.getDescriptorHostAddressRange(startIndex + i, 1);
+            hostAddresses[i] = self.getDescriptorHostAddressRange(startSlot + i, 1);
             switch (resources[i]) {
                 .buffer => |buf| {
                     buf.writeDescriptorData(&resourceDescData[i], &resourceDescInfos[i]);

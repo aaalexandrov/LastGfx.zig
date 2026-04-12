@@ -39,12 +39,16 @@ pub fn main() !void {
     defer samplerHeap.deinit();
 
     try samplerHeap.writeSamplerDescriptors(0, &[_]c.VkSamplerCreateInfo{vk.Sampler.createInfo(&.{})});
+    //const linearSamplerDescriptorIndex: u32 = 0;
 
     var buffer = try vk.Buffer.init(&gfx, &.{
         .size = 1024,
         .usage = vk.Usage.ShaderRead.Or(.HostAccess),
     }, 16);
     defer buffer.deinit();
+
+    const color: [4]f32 = .{ 1, 0.5, 0.0, 1 };
+    @as(*[4]f32, @ptrCast(@alignCast(buffer.hostAddress))).* = color;
 
     var image = try vk.Image.init(&gfx, &.{
         .format = c.VK_FORMAT_R8G8B8A8_UNORM,
@@ -57,19 +61,70 @@ pub fn main() !void {
     defer linearSampler.deinit();
 
     try resourceHeap.writeResourceDescriptors(0, &[_]vk.ResourcePtr{
-        .{.buffer = &buffer},
-        .{.image = &image},
+        .{ .image = &image },
+        .{ .buffer = &buffer },
     });
+    //const imageDescriptorIndex = 0 * resourceHeap.imageDescriptorsPerSlot;
+    const bufferDescriptorIndex: u32 = 1 * resourceHeap.bufferDescriptorsPerSlot;
 
     var cmds = try vk.Commands.init(&gfx);
     defer cmds.deinit();
 
-    try cmds.begin();
-    cmds.updateDescriptorHeap(&samplerHeap);
-    cmds.updateDescriptorHeap(&resourceHeap);
-    try cmds.end();
-    try cmds.submit(null);
-    try gfx.waitIdle();
+    {
+        try cmds.begin();
+
+        cmds.updateDescriptorHeap(&samplerHeap);
+        cmds.updateDescriptorHeap(&resourceHeap);
+
+        c.vkCmdPipelineBarrier2(cmds.handle, &c.VkDependencyInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &c.VkImageMemoryBarrier2{
+                .sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                .image = image.handle,
+                .srcAccessMask = 0,
+                .dstAccessMask = c.VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                .srcStageMask = c.VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                .dstStageMask = c.VK_PIPELINE_STAGE_TRANSFER_BIT,
+                .srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+                .oldLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+                .newLayout = c.VK_IMAGE_LAYOUT_GENERAL,
+                .subresourceRange = vk.wholeImage(c.VK_IMAGE_ASPECT_COLOR_BIT),
+            },
+        });
+
+        var bufStaging = try vk.Buffer.init(&gfx, &.{
+                .size = @intCast(image.desc.width * image.desc.height * 4), 
+                .usage = vk.Usage.TransferSrc.Or(.HostAccess)
+            }, 4);
+        defer bufStaging.deinit();
+        var pixel: [*]u8 = bufStaging.hostAddress.?;
+        for (0..@intCast(image.desc.height)) |y| {
+            for (0..@intCast(image.desc.width)) |x| {
+                const val: u8 = @intCast((y / 8 + x / 8) % 2 * 255);
+                @memcpy(pixel[0..4], &[4]u8{val, 0, val, 1});
+                pixel = pixel + 4;
+            }
+        }
+
+        cmds.copyBufferToImage(&bufStaging, &image, &[_]c.VkBufferImageCopy2{
+            .{
+                .sType = c.VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
+                .imageSubresource = .{
+                    .aspectMask = image.desc.imageAspect(),
+                    .mipLevel = 0,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+                .imageExtent = image.desc.extent3D(),
+            },
+        });
+
+        try cmds.end();
+        try cmds.submit(null);
+        try gfx.waitIdle();
+    }
 
     var running = true;
     var event = std.mem.zeroes(c.SDL_Event);
@@ -129,8 +184,7 @@ pub fn main() !void {
             });
             cmds.setScissor(&viewRect);
 
-            const color: [4]f32 = .{ 1, 0.5, 0, 1 };
-            cmds.pushData(&color);
+            cmds.pushData(&bufferDescriptorIndex);
 
             cmds.bindRenderPipeline(&pipeline);
             cmds.drawMeshTasks(3, 1, 1);
