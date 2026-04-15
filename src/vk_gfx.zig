@@ -1230,10 +1230,6 @@ fn alignToPowerOf2(x: anytype) @TypeOf(x) {
     return @as(T, @intCast(1)) << @intCast(@bitSizeOf(T) - @clz(x - 1));
 }
 
-fn isPowerOf2(x: anytype) bool {
-    return (x & (x - 1)) == 0;
-}
-
 pub const DescriptorHeap = struct {
     deviceBuffer: Buffer,
     cpuBuffer: Buffer,
@@ -1270,8 +1266,8 @@ pub const DescriptorHeap = struct {
             },
         }
 
-        std.debug.assert(isPowerOf2(maxDescriptorSize));
-        std.debug.assert(isPowerOf2(maxDescriptorAlignment));
+        std.debug.assert(std.math.isPowerOfTwo(maxDescriptorSize));
+        std.debug.assert(std.math.isPowerOfTwo(maxDescriptorAlignment));
         std.debug.assert(reservedSize % maxDescriptorSize == 0);
         const bufferSize = @min(reservedSize + maxDescriptorSize * numDescriptors, maxHeapSize);
 

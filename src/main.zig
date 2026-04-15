@@ -9,6 +9,7 @@ pub fn main() !void {
     };
 
     //try @import("zip_tree.zig").ZipTest(gpa.allocator());
+    try @import("rc_ptr.zig").RcTest(gpa.allocator());
 
     try errify(c.SDL_Init(c.SDL_INIT_VIDEO));
     defer c.SDL_Quit();
@@ -90,7 +91,7 @@ pub fn main() !void {
                 .dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
                 .oldLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
                 .newLayout = c.VK_IMAGE_LAYOUT_GENERAL,
-                .subresourceRange = vk.wholeImage(c.VK_IMAGE_ASPECT_COLOR_BIT),
+                .subresourceRange = vk.wholeImage(image.desc.imageAspect()),
             },
         });
 
@@ -164,7 +165,7 @@ pub fn main() !void {
                     .dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
                     .oldLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
                     .newLayout = c.VK_IMAGE_LAYOUT_GENERAL,
-                    .subresourceRange = vk.wholeImage(c.VK_IMAGE_ASPECT_COLOR_BIT),
+                    .subresourceRange = vk.wholeImage(swapImage.image.desc.imageAspect()),
                 },
             });
 
