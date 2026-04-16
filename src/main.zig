@@ -9,7 +9,7 @@ pub fn main() !void {
     };
 
     //try @import("zip_tree.zig").ZipTest(gpa.allocator());
-    try @import("rc_ptr.zig").RcTest(gpa.allocator());
+    //try @import("rc_ptr.zig").RcTest(gpa.allocator());
 
     try errify(c.SDL_Init(c.SDL_INIT_VIDEO));
     defer c.SDL_Quit();
@@ -40,16 +40,13 @@ pub fn main() !void {
     defer samplerHeap.deinit();
 
     try samplerHeap.writeSamplerDescriptors(0, &[_]c.VkSamplerCreateInfo{vk.Sampler.createInfo(&.{})});
-    //const linearSamplerDescriptorIndex: u32 = 0;
+    const linearSamplerDescriptorIndex: u32 = 0;
 
     var buffer = try vk.Buffer.init(&gfx, &.{
         .size = 1024,
         .usage = vk.Usage.ShaderRead.Or(.HostAccess),
     }, 16);
     defer buffer.deinit();
-
-    const color: [4]f32 = .{ 1, 0.5, 0.0, 1 };
-    @as(*[4]f32, @ptrCast(@alignCast(buffer.hostAddress))).* = color;
 
     var image = try vk.Image.init(&gfx, &.{
         .format = c.VK_FORMAT_R8G8B8A8_UNORM,
@@ -65,8 +62,20 @@ pub fn main() !void {
         .{ .image = &image },
         .{ .buffer = &buffer },
     });
-    //const imageDescriptorIndex = 0 * resourceHeap.imageDescriptorsPerSlot;
+    const imageDescriptorIndex = 0 * resourceHeap.imageDescriptorsPerSlot;
     const bufferDescriptorIndex: u32 = 1 * resourceHeap.bufferDescriptorsPerSlot;
+
+    const InputBuffer = extern struct {
+        color: [4]f32,
+        texIndex: u32,
+        samplerIndex: u32,
+    };
+    const bufContent = InputBuffer {
+        .color = .{ 1, 0.5, 0.0, 1 },
+        .texIndex = imageDescriptorIndex,
+        .samplerIndex = linearSamplerDescriptorIndex,
+    };
+    @as(*InputBuffer, @ptrCast(@alignCast(buffer.hostAddress))).* = bufContent;
 
     var cmds = try vk.Commands.init(&gfx);
     defer cmds.deinit();

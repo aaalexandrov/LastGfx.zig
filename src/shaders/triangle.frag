@@ -10,8 +10,10 @@ layout(push_constant) uniform constants {
 	uint inputDataBufferIndex;
 } PushConstants;
 
-layout(descriptor_heap) buffer InputData {
+layout(descriptor_heap) readonly buffer InputData {
   vec4 inColor;
+  uint texIndex;
+  uint samplerIndex;
 } heapInputData[];
 
 layout(descriptor_heap) uniform sampler heapSampler[];
@@ -20,8 +22,8 @@ layout(descriptor_heap) uniform texture2D heapTexture2D[];
 
 void main()
 {
-  //color = PushConstants.inColor;
   color = heapInputData[PushConstants.inputDataBufferIndex].inColor;
-  color *= texture(sampler2D(heapTexture2D[0], heapSampler[0]), uv);
-  //color.xyz *= vec3(uv, 1);
+  uint texIndex = heapInputData[PushConstants.inputDataBufferIndex].texIndex;
+  uint samplerIndex = heapInputData[PushConstants.inputDataBufferIndex].samplerIndex;
+  color *= texture(sampler2D(heapTexture2D[texIndex], heapSampler[samplerIndex]), uv);
 }
