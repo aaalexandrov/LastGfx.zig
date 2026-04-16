@@ -102,11 +102,15 @@ pub fn RcPtr(T: type, weak: bool, deinitFn: anytype) type {
         pub fn data(self: *const Self) ?*Data {
             comptime if (weak) unreachable;
 
-            return if (self.inner) |inner_| &inner_.data else null;
+            return if (self.getInner()) |inner_| &inner_.data else null;
         }
 
         pub fn isClear(self: *const Self) bool {
-            return self.inner == null;
+            return self.getInner() == null;
+        }
+
+        pub fn getRef(self: *const Self, weakCount: u1) Inner.Counter {
+            return if (self.getInner()) |inner_| inner_.getRef(weakCount) else 0;
         }
 
         fn getInner(self: *const Self) ?*Inner {
@@ -158,15 +162,15 @@ pub fn RcTest(alloc: std.mem.Allocator) !void {
     var rc1 = SharedU32{};
     defer rc1.clear(alloc);
     rc1.assign(&rc, alloc);
-    try expectEqual(2, rc1.inner.?.counters[0]);
+    try expectEqual(2, rc1.getRef(0));
     try expectEqual(rc.inner, rc1.inner);
 
     var wc: SharedU32.WeakPtr = WeakPtrNoDeinit(u32){};
     defer wc.clear(alloc);
 
     wc.assign(&rc1, alloc);
-    try expectEqual(2, wc.inner.?.counters[0]);
-    try expectEqual(1, wc.inner.?.counters[1]);
+    try expectEqual(2, wc.getRef(0));
+    try expectEqual(1, wc.getRef(1));
     try expectEqual(rc.inner, wc.inner);
 
     rc.clear(alloc);
@@ -174,19 +178,21 @@ pub fn RcTest(alloc: std.mem.Allocator) !void {
     rc.assign(&rc, alloc);
     try expect(rc.isClear());
 
-    try expectEqual(1, wc.inner.?.counters[0]);
-    try expectEqual(1, wc.inner.?.counters[1]);
+    try expectEqual(1, wc.getRef(0));
+    try expectEqual(1, wc.getRef(1));
     try expectEqual(rc1.inner, wc.inner);
 
     rc.assign(&wc, alloc);
-    try expectEqual(2, wc.inner.?.counters[0]);
-    try expectEqual(1, wc.inner.?.counters[1]);
+    try expectEqual(2, wc.getRef(0));
+    try expectEqual(1, wc.getRef(1));
     try expectEqual(rc.inner, wc.inner);
 
     rc.assignPtr(rc.data(), alloc);
-    try expectEqual(2, wc.inner.?.counters[0]);
-    try expectEqual(1, wc.inner.?.counters[1]);
+    try expectEqual(2, wc.getRef(0));
+    try expectEqual(1, wc.getRef(1));
     try expectEqual(rc.inner, wc.inner);
+
+    try expectEqual(44, rc1.data().?.*);
 }
 
 test "RcPtr" {
