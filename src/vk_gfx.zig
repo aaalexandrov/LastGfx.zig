@@ -93,8 +93,15 @@ pub const Gfx = struct {
         }
 
         self.physical = try self.selectPhysicalDevice();
-        std.log.info("GPU: {s}, Vulkan ver.{}.{}.{}.{}\n", .{
+
+
+        std.log.info("GPU: {s} driver ver.{s}, conformance ver.{}.{}.{}.{}, Vulkan ver.{}.{}.{}.{}\n", .{
             self.physical.props.properties.deviceName,
+            self.physical.driverProps.driverInfo,
+            self.physical.driverProps.conformanceVersion.major,
+            self.physical.driverProps.conformanceVersion.minor,
+            self.physical.driverProps.conformanceVersion.subminor,
+            self.physical.driverProps.conformanceVersion.patch,
             c.VK_API_VERSION_VARIANT(self.physical.props.properties.apiVersion),
             c.VK_API_VERSION_MAJOR(self.physical.props.properties.apiVersion),
             c.VK_API_VERSION_MINOR(self.physical.props.properties.apiVersion),
@@ -257,6 +264,7 @@ pub const PhysicalDevice = struct {
     handle: c.VkPhysicalDevice = null,
     props: c.VkPhysicalDeviceProperties2 = .{ .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 },
     extensions: []c.VkExtensionProperties = &.{},
+    driverProps: c.VkPhysicalDeviceDriverProperties = .{ .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES },
     descriptorHeapProps: c.VkPhysicalDeviceDescriptorHeapPropertiesEXT = .{ .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT },
     universalQueueFamily: i32 = -1,
 
@@ -266,7 +274,8 @@ pub const PhysicalDevice = struct {
             .handle = physDev,
         };
 
-        phys.props.pNext = &phys.descriptorHeapProps;
+        phys.props.pNext = &phys.driverProps;
+        phys.driverProps.pNext = &phys.descriptorHeapProps;
         c.vkGetPhysicalDeviceProperties2(phys.handle, &phys.props);
 
         var numExtensions: u32 = 0;
@@ -311,7 +320,7 @@ pub const RenderTarget = struct {
         return .{
             .sType = c.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
             .imageView = self.image.view,
-            .imageLayout = self.image.layout(),
+            .imageLayout = c.VK_IMAGE_LAYOUT_GENERAL,
             .loadOp = if (self.clearValue) |_| c.VK_ATTACHMENT_LOAD_OP_CLEAR else c.VK_ATTACHMENT_LOAD_OP_LOAD,
             .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
             .clearValue = if (self.clearValue) |clr| clr else std.mem.zeroes(c.VkClearValue),
@@ -451,6 +460,53 @@ pub const Commands = struct {
         try check(c.vkEndCommandBuffer(self.handle));
     }
 
+    fn stageWithDefault(stage: c.VkPipelineStageFlags2, default: c.VkPipelineStageFlags2) c.VkPipelineStageFlags2 {
+        return
+            if (stage != 0)
+                stage
+            else 
+                default;
+    }
+
+    pub fn bufferBarrier(self: *Self, buffer: *const Buffer, prevUsage: Usage, prevPipelineKind: Pipeline.Kind, nextUsage: Usage, nextPipelineKind: Pipeline.Kind) void {
+        c.vkCmdPipelineBarrier2(self.handle, &c.VkDependencyInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .bufferMemoryBarrierCount = 1,
+            .pBufferMemoryBarriers = &c.VkBufferMemoryBarrier2{
+                .sType = c.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                .srcStageMask = stageWithDefault(Buffer.stageFlags(prevUsage, prevPipelineKind), c.VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT),
+                .dstStageMask = stageWithDefault(Buffer.stageFlags(nextUsage, nextPipelineKind), c.VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT),
+                .srcAccessMask = Buffer.accessFlags(prevUsage),
+                .dstAccessMask = Buffer.accessFlags(nextUsage),
+                .srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+                .buffer = buffer.handle,
+                .offset = 0,
+                .size = buffer.desc.size,
+            },
+        });
+    }
+
+    pub fn imageBarrier(self: *Self, image: *const Image, prevUsage: Usage, prevPipelineKind: Pipeline.Kind, nextUsage: Usage, nextPipelineKind: Pipeline.Kind) void {
+        c.vkCmdPipelineBarrier2(self.handle, &c.VkDependencyInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &c.VkImageMemoryBarrier2{
+                .sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                .srcStageMask = stageWithDefault(Image.stageFlags(prevUsage, image.desc.format, prevPipelineKind), c.VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT),
+                .dstStageMask = stageWithDefault(Image.stageFlags(nextUsage, image.desc.format, nextPipelineKind), c.VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT),
+                .srcAccessMask = Image.accessFlags(prevUsage, image.desc.format),
+                .dstAccessMask = Image.accessFlags(nextUsage, image.desc.format),
+                .oldLayout = Image.imageLayout(prevUsage),
+                .newLayout = Image.imageLayout(nextUsage),
+                .srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+                .image = image.handle,
+                .subresourceRange = wholeImage(image.desc.imageAspect()),
+            },
+        });
+    }
+
     pub fn copyBuffer(self: *Self, srcBuffer: *const Buffer, dstBuffer: *const Buffer, regions: []const c.VkBufferCopy2) void {
         c.vkCmdCopyBuffer2(self.handle, &c.VkCopyBufferInfo2{
             .sType = c.VK_STRUCTURE_TYPE_COPY_BUFFER_INFO_2,
@@ -478,7 +534,7 @@ pub const Commands = struct {
             .sType = c.VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2,
             .srcBuffer = srcBuffer.handle,
             .dstImage = dstImage.handle,
-            .dstImageLayout = dstImage.layout(),
+            .dstImageLayout = c.VK_IMAGE_LAYOUT_GENERAL,
             .regionCount = @intCast(regions.len),
             .pRegions = regions.ptr,
         });
@@ -826,7 +882,6 @@ pub const Usage = packed struct {
     hostRead: bool = false,
     hostWrite: bool = false,
     imageRead: bool = false,
-    imageWrite: bool = false,
     storageRead: bool = false,
     storageWrite: bool = false,
     attachmentRead: bool = false,
@@ -1110,11 +1165,6 @@ pub const Image = struct {
             c.vmaDestroyImage(self.gfx.vma, self.handle, self.allocation);
     }
 
-    pub fn layout(self: *const Self) c.VkImageLayout {
-        _ = self;
-        return c.VK_IMAGE_LAYOUT_GENERAL;
-    }
-
     fn viewCreateInfo(self: *const Self) c.VkImageViewCreateInfo {
         return .{
             .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -1139,7 +1189,7 @@ pub const Image = struct {
                 .descInfo = .{
                     .sType = c.VK_STRUCTURE_TYPE_IMAGE_DESCRIPTOR_INFO_EXT,
                     .pView = &resourceData.image.viewCreateInfo,
-                    .layout = self.layout(),
+                    .layout = c.VK_IMAGE_LAYOUT_GENERAL,
                 },
             },
         };
@@ -1207,6 +1257,16 @@ pub const Image = struct {
                 c.VK_IMAGE_ASPECT_COLOR_BIT;
     }
 
+    fn imageLayout(usage: Usage) c.VkImageLayout {
+        return
+            if (usage.present)
+                c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+            else if (usage == Usage{})
+                c.VK_IMAGE_LAYOUT_UNDEFINED
+            else
+                c.VK_IMAGE_LAYOUT_GENERAL;
+    }
+
     fn descriptorType(usage: Usage) c.VkDescriptorType {
         return 
             if (usage.storageRead or usage.storageWrite)
@@ -1222,37 +1282,56 @@ pub const Image = struct {
     fn accessFlags(usage: Usage, format: c.VkFormat) c.VkAccessFlags2 {
         var access: c.VkAccessFlags2 = 0;
 
-        _ = usage;
-        _ = format;
-        access = 0;
-
-        // if (usage.HasAny(.ShaderRead))
-        //     access |= c.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-        // if (usage.HasAny(.ShaderWrite))
-        //     access |= c.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        // if (usage.HasAny(.TransferSrc))
-        //     access |= c.VK_ACCESS_2_TRANSFER_READ_BIT;
-        // if (usage.HasAny(.TransferDst))
-        //     access |= c.VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        // if (usage.HasAny(.HostRead))
-        //     access |= c.VK_ACCESS_2_HOST_READ_BIT;
-        // if (usage.HasAny(.HostWrite))
-        //     access |= c.VK_ACCESS_2_HOST_WRITE_BIT;
-        // if (usage.HasAny(.SamplerHeap))
-        //     access |= c.VK_ACCESS_2_SAMPLER_HEAP_READ_BIT_EXT;
-        // if (usage.HasAny(.ResourceHeap))
-        //     access |= c.VK_ACCESS_2_RESOURCE_HEAP_READ_BIT_EXT;
+        if (usage.imageRead)
+            access |= c.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        if (usage.storageRead)
+            access |= c.VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+        if (usage.storageWrite)
+            access |= c.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        if (usage.transferSrc or usage.present)
+            access |= c.VK_ACCESS_2_TRANSFER_READ_BIT;
+        if (usage.transferDst)
+            access |= c.VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        if (usage.hostRead)
+            access |= c.VK_ACCESS_2_HOST_READ_BIT;
+        if (usage.hostWrite)
+            access |= c.VK_ACCESS_2_HOST_WRITE_BIT;
+        if (usage.attachmentRead)
+            access |= 
+                if (isDepthStencilFormat(format))
+                    c.VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT
+                else
+                    c.VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
+        if (usage.attachmentWrite)
+            access |=
+                if (isDepthStencilFormat(format))
+                    c.VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+                else
+                    c.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
 
         return access;
     }
 
-    fn stageFlags(usage: Usage, pipelineKind: Pipeline.Kind) c.VkPipelineStageFlags2 {
+    fn stageFlags(usage: Usage, format: c.VkFormat, pipelineKind: Pipeline.Kind) c.VkPipelineStageFlags2 {
         var stage: c.VkPipelineStageFlags2 = 0;
-
-        _ = usage;
-        _ = pipelineKind;
-        stage = 0;
-
+        if (usage.transferSrc or usage.transferDst)
+            stage |= c.VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        if (usage.present)
+            stage |= c.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+        if (usage.imageRead or usage.storageRead or usage.storageWrite)
+            stage |= 
+                switch (pipelineKind) {
+                    .Graphics => c.VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT | c.VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    .Compute => c.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                };
+        if (usage.attachmentRead or usage.attachmentWrite) {
+            std.debug.assert(pipelineKind == .Graphics);
+            stage |= 
+                if (isDepthStencilFormat(format))
+                    c.VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | c.VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT
+                else
+                    c.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        }
         return stage;
     }
 };
