@@ -44,7 +44,7 @@ pub fn main() !void {
 
     var buffer = try vk.Buffer.init(&gfx, &.{
         .size = 1024,
-        .usage = vk.Usage.ShaderRead.Or(.HostAccess),
+        .usage = vk.Usage{.storageRead = true, .hostWrite = true},
     }, 16);
     defer buffer.deinit();
 
@@ -106,7 +106,7 @@ pub fn main() !void {
 
         var bufStaging = try vk.Buffer.init(&gfx, &.{
                 .size = @intCast(image.desc.width * image.desc.height * 4), 
-                .usage = vk.Usage.TransferSrc.Or(.HostAccess)
+                .usage = vk.Usage{.transferSrc = true, .hostWrite = true},
             }, 4);
         defer bufStaging.deinit();
         var pixel: [*]u8 = bufStaging.hostAddress.?;
