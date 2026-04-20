@@ -11,7 +11,7 @@ pub fn main() !void {
     //try @import("zip_tree.zig").ZipTest(gpa.allocator());
     //try @import("rc_ptr.zig").RcTest(gpa.allocator());
 
-    try errify(c.SDL_Init(c.SDL_INIT_VIDEO));
+    try vk.sdl_errify(c.SDL_Init(c.SDL_INIT_VIDEO));
     defer c.SDL_Quit();
 
     const window = c.SDL_CreateWindow("LastGfx", 400, 300, c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_VULKAN);
@@ -117,7 +117,14 @@ pub fn main() !void {
 
         try cmds.end();
         try cmds.submit(null);
-        try gfx.waitIdle();
+        try cmds.waitFinished();
+    }
+
+    const timeStartMS = std.time.milliTimestamp();
+    var frames: i64 = 0;
+    defer {
+        const elapsed: f64 = @as(f64, @floatFromInt(std.time.milliTimestamp() - timeStartMS)) / @as(f64, @floatFromInt(std.time.ms_per_s));
+        std.log.info("Frames: {}, seconds: {d:1.3}, average FPS: {d:1.3}", .{frames, elapsed, @as(f64, @floatFromInt(frames)) / elapsed});
     }
 
     var running = true;
@@ -125,9 +132,7 @@ pub fn main() !void {
     while (running) {
         while (c.SDL_PollEvent(&event)) {
             switch (event.type) {
-                c.SDL_EVENT_QUIT => {
-                    running = false;
-                },
+                c.SDL_EVENT_QUIT => running = false,
                 else => {},
             }
         }
@@ -137,8 +142,6 @@ pub fn main() !void {
             swapchainImage = try swapchain.acquireNextImage();
 
         if (swapchainImage) |swapImage| {
-            try vk.check(c.vkResetFences(gfx.device.handle, 1, &cmds.fence));
-
             try cmds.begin();
 
             cmds.bindDescriptorHeap(&samplerHeap);
@@ -176,30 +179,12 @@ pub fn main() !void {
 
             swapchain.present(swapImage.image, null) catch {};
 
-            try gfx.waitIdle();
+            try cmds.waitFinished();
+
+            frames += 1;
         } else {
             try swapchain.recreate();
         }
     }
 }
 
-/// Converts the return value of an SDL function to an error union.
-inline fn errify(value: anytype) error{SdlError}!switch (@typeInfo(@TypeOf(value))) {
-    .bool => void,
-    .pointer, .optional => @TypeOf(value.?),
-    .int => |info| switch (info.signedness) {
-        .signed => @TypeOf(@max(0, value)),
-        .unsigned => @TypeOf(value),
-    },
-    else => @compileError("unerrifiable type: " ++ @typeName(@TypeOf(value))),
-} {
-    return switch (@typeInfo(@TypeOf(value))) {
-        .bool => if (!value) error.SdlError,
-        .pointer, .optional => value orelse error.SdlError,
-        .int => |info| switch (info.signedness) {
-            .signed => if (value >= 0) @max(0, value) else error.SdlError,
-            .unsigned => if (value != 0) value else error.SdlError,
-        },
-        else => comptime unreachable,
-    };
-}

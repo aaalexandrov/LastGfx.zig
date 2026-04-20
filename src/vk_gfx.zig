@@ -95,7 +95,7 @@ pub const Gfx = struct {
         self.physical = try self.selectPhysicalDevice();
 
 
-        std.log.info("GPU: {s} driver ver.{s}, conformance ver.{}.{}.{}.{}, Vulkan ver.{}.{}.{}.{}\n", .{
+        std.log.info("GPU: {s}, driver ver.{s}, conformance ver.{}.{}.{}.{}, Vulkan ver.{}.{}.{}.{}\n", .{
             self.physical.props.properties.deviceName,
             self.physical.driverProps.driverInfo,
             self.physical.driverProps.conformanceVersion.major,
@@ -362,6 +362,7 @@ pub const Commands = struct {
     }
 
     pub fn begin(self: *Self) !void {
+        try check(c.vkResetFences(self.gfx.device.handle, 1, &self.fence));
         try check(c.vkBeginCommandBuffer(self.handle, &c.VkCommandBufferBeginInfo{
             .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         }));
@@ -572,6 +573,27 @@ pub const Commands = struct {
             self.fence,
         ));
     }
+
+    pub fn waitFinished(self: *Self) !void {
+        try check(c.vkWaitForFences(
+            self.gfx.device.handle,
+            1, 
+            &self.fence, 
+            c.VK_TRUE, 
+            std.math.maxInt(u64)
+        ));
+    }
+
+    pub fn isFinished(self: *Self) !bool {
+        check(c.vkGetFenceStatus(
+            self.gfx.device.handle, 
+            self.fence
+        )) catch |err| switch (err) {
+            error.vk_not_ready => return false,
+            else => return err,
+        };
+        return true;
+    }
 };
 
 pub const Swapchain = struct {
@@ -583,6 +605,8 @@ pub const Swapchain = struct {
     gfx: *Gfx,
     window: ?*c.SDL_Window,
     capabilitiesHasValidExtent: bool = true,
+    presentModes: []c.VkPresentModeKHR = &[_]c.VkPresentModeKHR{},
+    presentModeIndex: u8 = 0,
 
     pub const Self = @This();
     pub const ImageWithSemaphore = struct {
@@ -594,6 +618,12 @@ pub const Swapchain = struct {
         var self: Self = .{ .gfx = gfx, .window = window };
         if (!c.SDL_Vulkan_CreateSurface(window, gfx.instance, gfx.allocCB, &self.surface))
             unreachable;
+
+        var numPresentModes: u32 = 0;
+        try check(c.vkGetPhysicalDeviceSurfacePresentModesKHR(gfx.physical.handle, self.surface, &numPresentModes, null));
+        self.presentModes = try gfx.alloc.alloc(c.VkPresentModeKHR, numPresentModes);
+        try check(c.vkGetPhysicalDeviceSurfacePresentModesKHR(gfx.physical.handle, self.surface, &numPresentModes, self.presentModes.ptr));
+        self.presentModeIndex = self.getPresentModeIndex(c.VK_PRESENT_MODE_IMMEDIATE_KHR) orelse 0;
 
         try self.initSwapchain();
 
@@ -621,7 +651,7 @@ pub const Swapchain = struct {
             .surface = self.surface,
             .queueFamilyIndexCount = 1,
             .pQueueFamilyIndices = &[_]u32{@intCast(self.gfx.physical.universalQueueFamily)},
-            .presentMode = c.VK_PRESENT_MODE_FIFO_KHR,
+            .presentMode = self.presentModes[self.presentModeIndex],
             .imageFormat = self.gfx.swapchainFormat,
             .imageColorSpace = self.gfx.swapchainColorspace,
             .imageExtent = surfaceCaps.currentExtent,
@@ -670,6 +700,7 @@ pub const Swapchain = struct {
 
     pub fn deinit(self: *Self) void {
         self.deinitSwapchain();
+        self.gfx.alloc.free(self.presentModes);
         c.SDL_Vulkan_DestroySurface(self.gfx.instance, self.surface, self.gfx.allocCB);
     }
 
@@ -680,6 +711,14 @@ pub const Swapchain = struct {
 
     pub fn isValid(self: *Self) bool {
         return self.handle != null;
+    }
+
+    pub fn getPresentModeIndex(self: *Self, mode: c.VkPresentModeKHR) ?u8 {
+        for (self.presentModes, 0..) |m, i| {
+            if (m == mode)
+                return @intCast(i);
+        }
+        return null;
     }
 
     pub fn isWindowRenderable(self: *Self) bool {
@@ -712,9 +751,8 @@ pub const Swapchain = struct {
             .timeout = std.math.maxInt(u64),
             .semaphore = self.semaphores[self.semaphoreIndex],
         }, &imgIndex)) catch |err| switch (err) {
-            error.vk_suboptimal_khr, error.vk_error_out_of_date_khr => {
-                return null;
-            },
+            error.vk_suboptimal_khr, error.vk_error_out_of_date_khr => 
+                return null,
             else => |anotherErr| 
                 return anotherErr,
         };
@@ -1604,5 +1642,26 @@ pub fn check(result: c.VkResult) !void {
         c.VK_ERROR_COMPRESSION_EXHAUSTED_EXT => error.vk_error_compression_exhausted_ext,
         c.VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT => error.vk_error_incompatible_shader_binary_ext,
         else => error.vk_error_unknown,
+    };
+}
+
+/// Converts the return value of an SDL function to an error union.
+pub fn sdl_errify(value: anytype) error{SdlError}!switch (@typeInfo(@TypeOf(value))) {
+    .bool => void,
+    .pointer, .optional => @TypeOf(value.?),
+    .int => |info| switch (info.signedness) {
+        .signed => @TypeOf(@max(0, value)),
+        .unsigned => @TypeOf(value),
+    },
+    else => @compileError("unerrifiable type: " ++ @typeName(@TypeOf(value))),
+} {
+    return switch (@typeInfo(@TypeOf(value))) {
+        .bool => if (!value) error.SdlError,
+        .pointer, .optional => value orelse error.SdlError,
+        .int => |info| switch (info.signedness) {
+            .signed => if (value >= 0) @max(0, value) else error.SdlError,
+            .unsigned => if (value != 0) value else error.SdlError,
+        },
+        else => comptime unreachable,
     };
 }
