@@ -1,6 +1,14 @@
 const std = @import("std");
 const c = @import("cimport.zig").c;
 const vk = @import("vk_gfx.zig");
+const rc = @import("rc_ptr.zig");
+
+const CommandsDeinit = struct {
+    fn deinit(cmds: *vk.Commands, _: std.mem.Allocator) void {
+        cmds.deinit();
+    }
+};
+const CommandsPtr = rc.SharedPtr(vk.Commands, CommandsDeinit.deinit);
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -77,10 +85,11 @@ pub fn main() !void {
     };
     @as(*InputBuffer, @ptrCast(@alignCast(buffer.hostAddress))).* = bufContent;
 
-    var cmds = try vk.Commands.init(&gfx);
-    defer cmds.deinit();
 
     {
+        var cmds = try vk.Commands.init(&gfx);
+        defer cmds.deinit();
+
         try cmds.begin();
 
         cmds.updateDescriptorHeap(&samplerHeap);
@@ -127,21 +136,41 @@ pub fn main() !void {
         std.log.info("Frames: {}, seconds: {d:1.3}, average FPS: {d:1.3}", .{frames, elapsed, @as(f64, @floatFromInt(frames)) / elapsed});
     }
 
+    var commands = try std.ArrayList(CommandsPtr).initCapacity(gfx.alloc, 8);
+    defer {
+        for (commands.items) |*ptr| {
+            ptr.data().?.waitFinished() catch {};
+            ptr.clear(gfx.alloc);
+        } 
+        commands.deinit(gfx.alloc);
+    }
+
     var running = true;
     var event = std.mem.zeroes(c.SDL_Event);
     while (running) {
         while (c.SDL_PollEvent(&event)) {
             switch (event.type) {
                 c.SDL_EVENT_QUIT => running = false,
+                c.SDL_EVENT_KEY_DOWN => 
+                    switch (event.key.key) {
+                        c.SDLK_V => {
+                            swapchain.presentModeIndex = (swapchain.presentModeIndex + 1) % @as(u8, @intCast(swapchain.presentModes.len));
+                            std.log.info("Present mode {} of {}", .{swapchain.presentModeIndex + 1, swapchain.presentModes.len});
+                        },
+                        else => {},
+                    },
                 else => {},
             }
         }
 
         var swapchainImage: ?vk.Swapchain.ImageWithSemaphore = null;
-        if (swapchain.checkSurfaceSize())
+        if (swapchain.isValid())
             swapchainImage = try swapchain.acquireNextImage();
 
         if (swapchainImage) |swapImage| {
+            const cmds = commands.items[swapImage.imageIndex].data().?;
+
+            try cmds.waitFinished();
             try cmds.begin();
 
             cmds.bindDescriptorHeap(&samplerHeap);
@@ -179,11 +208,20 @@ pub fn main() !void {
 
             swapchain.present(swapImage.image, null) catch {};
 
-            try cmds.waitFinished();
+            //try cmds.waitFinished();
 
             frames += 1;
         } else {
+            for (commands.items) |*cmd| {
+                try cmd.data().?.waitFinished();
+                cmd.clear(gfx.alloc);
+            }
             try swapchain.recreate();
+            try commands.resize(gfx.alloc, swapchain.images.len);
+            for (commands.items) |*cmd| {
+                cmd.* = .{};
+                try cmd.allocate(gfx.alloc, try vk.Commands.init(&gfx));
+            }
         }
     }
 }
