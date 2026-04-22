@@ -16,17 +16,15 @@ pub fn main() !void {
         @panic("Leaked memory detected on exit!");
     };
 
-    //try @import("zip_tree.zig").ZipTest(gpa.allocator());
-    //try @import("rc_ptr.zig").RcTest(gpa.allocator());
-
     try vk.sdl_errify(c.SDL_Init(c.SDL_INIT_VIDEO));
     defer c.SDL_Quit();
 
     const window = c.SDL_CreateWindow("LastGfx", 400, 300, c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_VULKAN);
     defer c.SDL_DestroyWindow(window);
 
+    const activateDebugLayers = @import("builtin").mode == .Debug or @import("builtin").mode == .ReleaseSafe;
     var gfx: vk.Gfx = undefined;
-    try gfx.init(gpa.allocator(), true);
+    try gfx.init(gpa.allocator(), activateDebugLayers);
     defer gfx.deinit();
 
     var swapchain = try vk.Swapchain.init(&gfx, window);
@@ -136,11 +134,12 @@ pub fn main() !void {
         std.log.info("Frames: {}, seconds: {d:1.3}, average FPS: {d:1.3}", .{frames, elapsed, @as(f64, @floatFromInt(frames)) / elapsed});
     }
 
-    var commands = try std.ArrayList(CommandsPtr).initCapacity(gfx.alloc, 8);
+    var commands = try std.ArrayList(vk.Commands).initCapacity(gfx.alloc, 8);
+    var commandsIndex: u8 = 0;
     defer {
-        for (commands.items) |*ptr| {
-            ptr.data().?.waitFinished() catch {};
-            ptr.clear(gfx.alloc);
+        for (commands.items) |*cmds| {
+            cmds.waitFinished() catch {};
+            cmds.deinit();
         } 
         commands.deinit(gfx.alloc);
     }
@@ -168,7 +167,9 @@ pub fn main() !void {
             swapchainImage = try swapchain.acquireNextImage();
 
         if (swapchainImage) |swapImage| {
-            const cmds = commands.items[swapImage.imageIndex].data().?;
+
+            const cmds = &commands.items[commandsIndex];
+            commandsIndex = (commandsIndex + 1) % @as(@TypeOf(commandsIndex), @intCast(commands.items.len));
 
             try cmds.waitFinished();
             try cmds.begin();
@@ -208,20 +209,23 @@ pub fn main() !void {
 
             swapchain.present(swapImage.image, null) catch {};
 
-            //try cmds.waitFinished();
-
             frames += 1;
         } else {
-            for (commands.items) |*cmd| {
-                try cmd.data().?.waitFinished();
-                cmd.clear(gfx.alloc);
-            }
+            for (commands.items) |*cmds| 
+                try cmds.waitFinished();
             try swapchain.recreate();
-            try commands.resize(gfx.alloc, swapchain.images.len);
-            for (commands.items) |*cmd| {
-                cmd.* = .{};
-                try cmd.allocate(gfx.alloc, try vk.Commands.init(&gfx));
+            const prevLen = commands.items.len;
+            const newLen = swapchain.images.len;
+            if (newLen < prevLen) {
+                for (commands.items[newLen..prevLen]) |*cmds|
+                    cmds.deinit();
             }
+            try commands.resize(gfx.alloc, newLen);
+            if (prevLen < newLen) {
+                for (commands.items[prevLen..newLen]) |*cmds|
+                    cmds.* = try vk.Commands.init(&gfx);
+            }
+            commandsIndex = 0;
         }
     }
 }
