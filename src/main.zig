@@ -28,7 +28,7 @@ pub fn main() !void {
     defer gfx.deinit();
 
     var swapchain = try vk.Swapchain.init(&gfx, window);
-    defer swapchain.deinit();
+    defer swapchain.deinit() catch {};
 
     var shaderMesh = try vk.Shader.init(&gfx, "shaders/triangle.mesh.spv");
     defer shaderMesh.deinit(&gfx);
@@ -211,20 +211,24 @@ pub fn main() !void {
 
             frames += 1;
         } else {
-            for (commands.items) |*cmds| 
-                try cmds.waitFinished();
             try swapchain.recreate();
-            const prevLen = commands.items.len;
-            const newLen = swapchain.images.len;
-            if (newLen < prevLen) {
-                for (commands.items[newLen..prevLen]) |*cmds|
-                    cmds.deinit();
-            }
-            try commands.resize(gfx.alloc, newLen);
-            if (prevLen < newLen) {
-                for (commands.items[prevLen..newLen]) |*cmds|
-                    cmds.* = try vk.Commands.init(&gfx);
-            }
+            // const prevLen = commands.items.len;
+            // const newLen = swapchain.images.len;
+            // if (newLen < prevLen) {
+            //     for (commands.items[newLen..prevLen]) |*cmds|
+            //         cmds.deinit();
+            // }
+            // try commands.resize(gfx.alloc, newLen);
+            // if (prevLen < newLen) {
+            //     for (commands.items[prevLen..newLen]) |*cmds|
+            //         cmds.* = try vk.Commands.init(&gfx);
+            // }
+            for (commands.items) |*cmds|
+                cmds.deinit();
+            try commands.resize(gfx.alloc, swapchain.images.len);
+            for (commands.items) |*cmds|
+                cmds.* = try vk.Commands.init(&gfx);
+
             commandsIndex = 0;
         }
     }

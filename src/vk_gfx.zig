@@ -695,9 +695,10 @@ pub const Swapchain = struct {
         std.debug.assert(self.semaphores.len <= @bitSizeOf(u32));
     }
 
-    fn deinitSwapchain(self: *Self) void {
+    fn deinitSwapchain(self: *Self) !void {
         if (self.handle == null)
             return;
+        try self.gfx.waitIdle();
         for (self.images) |*img| {
             img.deinit();
         }
@@ -710,14 +711,14 @@ pub const Swapchain = struct {
         self.handle = null;
     }
 
-    pub fn deinit(self: *Self) void {
-        self.deinitSwapchain();
+    pub fn deinit(self: *Self) !void {
+        try self.deinitSwapchain();
         self.gfx.alloc.free(self.presentModes);
         c.SDL_Vulkan_DestroySurface(self.gfx.instance, self.surface, self.gfx.allocCB);
     }
 
     pub fn recreate(self: *Self) !void {
-        self.deinitSwapchain();
+        try self.deinitSwapchain();
         try self.initSwapchain();
     }
 
