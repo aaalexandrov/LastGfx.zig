@@ -610,10 +610,9 @@ pub const Swapchain = struct {
     capabilitiesHasValidExtent: bool = true,
     presentModes: []c.VkPresentModeKHR = &[_]c.VkPresentModeKHR{},
     presentModeIndex: u8 = 0,
-    activePresentModeIndex: u8 = 0,
     numImages: u8 = 3,
-    activeNumImages: u8 = 0,
     maxNumImages: u8 = 1,
+    needsRecreate: bool = true,
 
     pub const Self = @This();
 
@@ -648,6 +647,7 @@ pub const Swapchain = struct {
             _ = c.SDL_GetWindowSize(self.window, @ptrCast(&surfaceCaps.currentExtent.width), @ptrCast(&surfaceCaps.currentExtent.height));
 
         self.numImages = @intCast(@min(@max(surfaceCaps.minImageCount, self.numImages), surfaceCaps.maxImageCount));
+        self.maxNumImages = @intCast(surfaceCaps.maxImageCount);
 
         const swapchainInfo = c.VkSwapchainCreateInfoKHR{
             .sType = c.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
@@ -667,10 +667,6 @@ pub const Swapchain = struct {
         };
         try check(c.vkCreateSwapchainKHR(self.gfx.device.handle, &swapchainInfo, self.gfx.allocCB, &self.handle));
 
-        self.activePresentModeIndex = self.presentModeIndex;
-        self.activeNumImages = self.numImages;
-        self.maxNumImages = @intCast(surfaceCaps.maxImageCount);
-
         var numImages: u32 = 0;
         try check(c.vkGetSwapchainImagesKHR(self.gfx.device.handle, self.handle, &numImages, null));
         const images = try self.gfx.alloc.alloc(c.VkImage, numImages);
@@ -686,6 +682,7 @@ pub const Swapchain = struct {
             };
             self.images[i] = try Image.initExisting(self.gfx, &desc, img);
         }
+        self.needsRecreate = false;
     }
 
     fn deinitSwapchain(self: *Self) !void {
@@ -718,17 +715,23 @@ pub const Swapchain = struct {
         return null;
     }
 
+    pub fn setPresentModeIndex(self: *Self, modeIndex: u8) void {
+        self.presentModeIndex = if (modeIndex < self.presentModes.len) modeIndex else 0;
+        self.needsRecreate = true;
+    }
+
+    pub fn setNumImages(self: *Self, numImages: u8) void {
+        self.numImages = numImages;
+        self.needsRecreate = true;
+    }
+
     pub fn isWindowRenderable(self: *Self) bool {
         const windowFlags = c.SDL_GetWindowFlags(self.window);
         return windowFlags & (c.SDL_WINDOW_OCCLUDED | c.SDL_WINDOW_HIDDEN | c.SDL_WINDOW_MINIMIZED) == 0;
     }
 
     pub fn isValid(self: *Self) bool {
-        if (self.handle == null or !self.isWindowRenderable())
-            return false;
-        if (self.presentModeIndex != self.activePresentModeIndex)
-            return false;
-        if (self.numImages != self.activeNumImages)
+        if (self.handle == null or self.needsRecreate or !self.isWindowRenderable())
             return false;
         if (self.capabilitiesHasValidExtent)
             return true;
@@ -751,7 +754,9 @@ pub const Swapchain = struct {
             .timeout = std.math.maxInt(u64),
             .semaphore = semaphore,
         }, &imgIndex)) catch |err| switch (err) {
-            error.vk_suboptimal_khr, error.vk_error_out_of_date_khr => 
+            error.vk_suboptimal_khr => 
+                self.needsRecreate = true,
+            error.vk_error_out_of_date_khr => 
                 return null,
             else => |anotherErr| 
                 return anotherErr,

@@ -153,12 +153,12 @@ pub fn main() !void {
                 c.SDL_EVENT_KEY_DOWN => 
                     switch (event.key.key) {
                         c.SDLK_V => {
-                            swapchain.presentModeIndex = (swapchain.presentModeIndex + 1) % @as(u8, @intCast(swapchain.presentModes.len));
+                            swapchain.setPresentModeIndex((swapchain.presentModeIndex + 1) % @as(u8, @intCast(swapchain.presentModes.len)));
                             std.log.info("Present mode {} of {}", .{swapchain.presentModeIndex + 1, swapchain.presentModes.len});
                         },
                         c.SDLK_I => {
-                            swapchain.numImages = swapchain.numImages % swapchain.maxNumImages + 1;
-                            std.log.info("Attempting to set swapchain images to {} of {} max", .{swapchain.numImages, swapchain.maxNumImages});
+                            swapchain.setNumImages(swapchain.numImages % swapchain.maxNumImages + 1);
+                            std.log.info("Attempting to set number of swapchain images to {} of {} max", .{swapchain.numImages, swapchain.maxNumImages});
                         },
                         else => {},
                     },
