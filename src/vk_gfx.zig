@@ -332,6 +332,7 @@ pub const Commands = struct {
     handle: c.VkCommandBuffer = null,
     pool: c.VkCommandPool = null,
     fence: c.VkFence = null,
+    submitWaitSemaphore: c.VkSemaphore = null,
     gfx: *Gfx,
 
     pub const Self = @This();
@@ -352,10 +353,14 @@ pub const Commands = struct {
             .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
             .flags = c.VK_FENCE_CREATE_SIGNALED_BIT,
         }, gfx.allocCB, &self.fence));
+        try check(c.vkCreateSemaphore(gfx.device.handle, &c.VkSemaphoreCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+        }, gfx.allocCB, &self.submitWaitSemaphore));
         return self;
     }
 
     pub fn deinit(self: *Self) void {
+        c.vkDestroySemaphore(self.gfx.device.handle, self.submitWaitSemaphore, self.gfx.allocCB);
         c.vkDestroyFence(self.gfx.device.handle, self.fence, self.gfx.allocCB);
         c.vkFreeCommandBuffers(self.gfx.device.handle, self.pool, 1, &self.handle);
         c.vkDestroyCommandPool(self.gfx.device.handle, self.pool, self.gfx.allocCB);
@@ -600,24 +605,17 @@ pub const Swapchain = struct {
     handle: c.VkSwapchainKHR = null,
     surface: c.VkSurfaceKHR = null,
     images: []Image = &.{},
-    semaphores: []SemaphoreData = &.{},
     gfx: *Gfx,
     window: ?*c.SDL_Window,
     capabilitiesHasValidExtent: bool = true,
     presentModes: []c.VkPresentModeKHR = &[_]c.VkPresentModeKHR{},
     presentModeIndex: u8 = 0,
     activePresentModeIndex: u8 = 0,
+    numImages: u8 = 3,
+    activeNumImages: u8 = 0,
+    maxNumImages: u8 = 1,
 
-    pub const SemaphoreData = struct {
-        handle: c.VkSemaphore = null,
-        imageIndex: ?u8 = null,
-    };
     pub const Self = @This();
-    pub const ImageWithSemaphore = struct {
-        image: *Image, 
-        semaphore: c.VkSemaphore,
-        imageIndex: u32,
-    };
 
     pub fn init(gfx: *Gfx, window: ?*c.SDL_Window) !Self {
         var self: Self = .{ .gfx = gfx, .window = window };
@@ -649,6 +647,8 @@ pub const Swapchain = struct {
         if (!self.capabilitiesHasValidExtent)
             _ = c.SDL_GetWindowSize(self.window, @ptrCast(&surfaceCaps.currentExtent.width), @ptrCast(&surfaceCaps.currentExtent.height));
 
+        self.numImages = @intCast(@min(@max(surfaceCaps.minImageCount, self.numImages), surfaceCaps.maxImageCount));
+
         const swapchainInfo = c.VkSwapchainCreateInfoKHR{
             .sType = c.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
             .surface = self.surface,
@@ -661,13 +661,15 @@ pub const Swapchain = struct {
             .imageArrayLayers = 1,
             .imageUsage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | c.VK_IMAGE_USAGE_SAMPLED_BIT | c.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | c.VK_IMAGE_USAGE_TRANSFER_DST_BIT,
             .imageSharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
-            .minImageCount = surfaceCaps.minImageCount,
+            .minImageCount = @intCast(self.numImages),
             .preTransform = surfaceCaps.currentTransform,
             .compositeAlpha = c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
         };
         try check(c.vkCreateSwapchainKHR(self.gfx.device.handle, &swapchainInfo, self.gfx.allocCB, &self.handle));
 
         self.activePresentModeIndex = self.presentModeIndex;
+        self.activeNumImages = self.numImages;
+        self.maxNumImages = @intCast(surfaceCaps.maxImageCount);
 
         var numImages: u32 = 0;
         try check(c.vkGetSwapchainImagesKHR(self.gfx.device.handle, self.handle, &numImages, null));
@@ -684,29 +686,15 @@ pub const Swapchain = struct {
             };
             self.images[i] = try Image.initExisting(self.gfx, &desc, img);
         }
-
-        self.semaphores = try self.gfx.alloc.alloc(SemaphoreData, numImages + 1);
-        for (self.semaphores) |*sem| {
-            sem.* = .{};
-            try check(c.vkCreateSemaphore(self.gfx.device.handle, &c.VkSemaphoreCreateInfo{
-                .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-            }, self.gfx.allocCB, &sem.handle));
-        }
-        std.debug.assert(self.semaphores.len <= @bitSizeOf(u32));
     }
 
     fn deinitSwapchain(self: *Self) !void {
         if (self.handle == null)
             return;
         try self.gfx.waitIdle();
-        for (self.images) |*img| {
+        for (self.images) |*img|
             img.deinit();
-        }
-        for (self.semaphores) |*sem| {
-            c.vkDestroySemaphore(self.gfx.device.handle, sem.handle, self.gfx.allocCB);
-        }
         self.gfx.alloc.free(self.images);
-        self.gfx.alloc.free(self.semaphores);
         c.vkDestroySwapchainKHR(self.gfx.device.handle, self.handle, self.gfx.allocCB);
         self.handle = null;
     }
@@ -740,6 +728,8 @@ pub const Swapchain = struct {
             return false;
         if (self.presentModeIndex != self.activePresentModeIndex)
             return false;
+        if (self.numImages != self.activeNumImages)
+            return false;
         if (self.capabilitiesHasValidExtent)
             return true;
 
@@ -750,42 +740,23 @@ pub const Swapchain = struct {
         return width == self.images[0].desc.width and height == self.images[0].desc.height;
     }
 
-    pub fn acquireNextImage(self: *Self) !?ImageWithSemaphore {
+    pub fn acquireNextImage(self: *Self, semaphore: c.VkSemaphore) !?*Image {
         if (self.handle == null)
             return null;
-        var semaphoreIndex: u32 = std.math.maxInt(u32);
-        for (self.semaphores, 0..) |*sem, i| {
-            if (sem.imageIndex == null) {
-                semaphoreIndex = @intCast(i);
-                break;
-            }
-        }
-        std.debug.assert(semaphoreIndex < self.semaphores.len);
         var imgIndex: u32 = 0;
         check(c.vkAcquireNextImage2KHR(self.gfx.device.handle, &c.VkAcquireNextImageInfoKHR{
             .sType = c.VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR,
             .swapchain = self.handle,
             .deviceMask = 1,
             .timeout = std.math.maxInt(u64),
-            .semaphore = self.semaphores[semaphoreIndex].handle,
+            .semaphore = semaphore,
         }, &imgIndex)) catch |err| switch (err) {
             error.vk_suboptimal_khr, error.vk_error_out_of_date_khr => 
                 return null,
             else => |anotherErr| 
                 return anotherErr,
         };
-        for (self.semaphores) |*sem| {
-            if (sem.imageIndex == @as(u8, @intCast(imgIndex))) {
-                sem.imageIndex = null;
-                break;
-            }
-        }
-        self.semaphores[semaphoreIndex].imageIndex = @intCast(imgIndex);
-        return .{ 
-            .image = &self.images[imgIndex], 
-            .semaphore = self.semaphores[semaphoreIndex].handle, 
-            .imageIndex = imgIndex, 
-        };
+        return &self.images[imgIndex];
     }
 
     pub fn present(self: *Self, image: *Image, waitSemaphore: c.VkSemaphore) !void {

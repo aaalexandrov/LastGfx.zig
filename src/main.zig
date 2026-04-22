@@ -156,35 +156,38 @@ pub fn main() !void {
                             swapchain.presentModeIndex = (swapchain.presentModeIndex + 1) % @as(u8, @intCast(swapchain.presentModes.len));
                             std.log.info("Present mode {} of {}", .{swapchain.presentModeIndex + 1, swapchain.presentModes.len});
                         },
+                        c.SDLK_I => {
+                            swapchain.numImages = swapchain.numImages % swapchain.maxNumImages + 1;
+                            std.log.info("Attempting to set swapchain images to {} of {} max", .{swapchain.numImages, swapchain.maxNumImages});
+                        },
                         else => {},
                     },
                 else => {},
             }
         }
 
-        var swapchainImage: ?vk.Swapchain.ImageWithSemaphore = null;
-        if (swapchain.isValid())
-            swapchainImage = try swapchain.acquireNextImage();
+        var swapchainImage: ?*vk.Image = null;
+        if (swapchain.isValid()) {
+            const cmds = &commands.items[commandsIndex];
+            try cmds.waitFinished();
+            swapchainImage = try swapchain.acquireNextImage(cmds.submitWaitSemaphore);
+        }
 
         if (swapchainImage) |swapImage| {
-
             const cmds = &commands.items[commandsIndex];
-            commandsIndex = (commandsIndex + 1) % @as(@TypeOf(commandsIndex), @intCast(commands.items.len));
-
-            try cmds.waitFinished();
             try cmds.begin();
 
             cmds.bindDescriptorHeap(&samplerHeap);
             cmds.bindDescriptorHeap(&resourceHeap);
 
-            cmds.imageBarrier(swapImage.image, .{}, .Graphics, .{.attachmentWrite = true}, .Graphics);
+            cmds.imageBarrier(swapImage, .{}, .Graphics, .{.attachmentWrite = true}, .Graphics);
 
             const clearValue = c.VkClearColorValue{
                 .float32 = .{ 0, 0, 1, 1 },
             };
-            try cmds.renderBegin(&[_]vk.RenderTarget{.{ .image = swapImage.image, .clearValue = c.VkClearValue{ .color = clearValue } }}, null);
+            try cmds.renderBegin(&[_]vk.RenderTarget{.{ .image = swapImage, .clearValue = c.VkClearValue{ .color = clearValue } }}, null);
 
-            const viewRect = c.VkRect2D{ .extent = swapImage.image.desc.extent2D() };
+            const viewRect = c.VkRect2D{ .extent = swapImage.desc.extent2D() };
             cmds.setViewport(&c.VkViewport{
                 .x = @floatFromInt(viewRect.offset.x),
                 .y = @floatFromInt(viewRect.offset.y),
@@ -202,32 +205,23 @@ pub fn main() !void {
 
             cmds.renderEnd();
 
-            cmds.imageBarrier(swapImage.image, .{.attachmentWrite = true}, .Graphics, .{.present = true}, .Graphics);
+            cmds.imageBarrier(swapImage, .{.attachmentWrite = true}, .Graphics, .{.present = true}, .Graphics);
 
             try cmds.end();
-            try cmds.submit(swapImage.semaphore);
+            try cmds.submit(cmds.submitWaitSemaphore);
+            commandsIndex = (commandsIndex + 1) % @as(@TypeOf(commandsIndex), @intCast(commands.items.len));
 
-            swapchain.present(swapImage.image, null) catch {};
+            swapchain.present(swapImage, null) catch {};
 
             frames += 1;
         } else {
             try swapchain.recreate();
-            // const prevLen = commands.items.len;
-            // const newLen = swapchain.images.len;
-            // if (newLen < prevLen) {
-            //     for (commands.items[newLen..prevLen]) |*cmds|
-            //         cmds.deinit();
-            // }
-            // try commands.resize(gfx.alloc, newLen);
-            // if (prevLen < newLen) {
-            //     for (commands.items[prevLen..newLen]) |*cmds|
-            //         cmds.* = try vk.Commands.init(&gfx);
-            // }
-            for (commands.items) |*cmds|
-                cmds.deinit();
+
+            for (commands.items) |*cmd|
+                cmd.deinit();
             try commands.resize(gfx.alloc, swapchain.images.len);
-            for (commands.items) |*cmds|
-                cmds.* = try vk.Commands.init(&gfx);
+            for (commands.items) |*cmd|
+                cmd.* = try vk.Commands.init(&gfx);
 
             commandsIndex = 0;
         }
