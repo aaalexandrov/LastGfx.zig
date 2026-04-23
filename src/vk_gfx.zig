@@ -30,13 +30,14 @@ pub const Gfx = struct {
     device: Device,
     swapchainFormat: c.VkFormat,
     swapchainColorspace: c.VkColorSpaceKHR,
+    vma: c.VmaAllocator = null,
+
     cmdDrawMeshTasksEXT: c.PFN_vkCmdDrawMeshTasksEXT = null,
     cmdPushDataEXT: c.PFN_vkCmdPushDataEXT = null,
     cmdBindSamplerHeapEXT: c.PFN_vkCmdBindSamplerHeapEXT = null,
     cmdBindResourceHeapEXT: c.PFN_vkCmdBindResourceHeapEXT = null,
     writeResourceDescriptorsEXT: c.PFN_vkWriteResourceDescriptorsEXT = null,
     writeSamplerDescriptorsEXT: c.PFN_vkWriteSamplerDescriptorsEXT = null,
-    vma: c.VmaAllocator = null,
 
     pub const API_VERSION = c.VK_API_VERSION_1_4;
     pub const Self = @This();
@@ -201,6 +202,7 @@ pub const Gfx = struct {
                     .shaderStorageBufferArrayNonUniformIndexing = c.VK_TRUE,
                     .shaderSampledImageArrayNonUniformIndexing = c.VK_TRUE,
                     .shaderStorageImageArrayNonUniformIndexing = c.VK_TRUE,
+                    .timelineSemaphore = c.VK_TRUE,
                     .pNext = @constCast(&c.VkPhysicalDeviceVulkan13Features{
                         .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
                         .dynamicRendering = c.VK_TRUE,
@@ -311,6 +313,60 @@ pub const Device = struct {
     universalQueue: c.VkQueue,
 };
 
+pub const Semaphore = struct {
+    handle: c.VkSemaphore = null,
+    gfx: *Gfx,
+
+    pub const Self = @This();
+
+    pub fn init(gfx: *Gfx, timelineInitialValue: ?u64) !Self {
+        var self = Self{
+            .gfx = gfx,
+        };
+        try check(c.vkCreateSemaphore(gfx.device.handle, &c.VkSemaphoreCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            .pNext = &c.VkSemaphoreTypeCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+                .semaphoreType = 
+                    if (timelineInitialValue != null) 
+                        c.VK_SEMAPHORE_TYPE_TIMELINE 
+                    else 
+                        c.VK_SEMAPHORE_TYPE_BINARY,
+                .initialValue = timelineInitialValue orelse 0,
+            },
+        }, gfx.allocCB, &self.handle));
+        return self;
+    }
+
+    pub fn deinit(self: *Self) void {
+        c.vkDestroySemaphore(self.gfx.device.handle, self.handle, self.gfx.allocCB);
+    }
+
+    pub fn getTimelineCounter(self: *Self) !u64 {
+        var counter: u64 = 0;
+        try check(c.vkGetSemaphoreCounterValue(self.gfx.device.handle, self.handle, &counter));
+        return counter;
+    }
+
+    pub fn waitTimeline(self: *Self, counter: u64, timeout: u64) !void {
+        try check(c.vkWaitSemaphores(self.gfx.device.handle, &c.VkSemaphoreWaitInfo{
+            .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+            .flags = 0,
+            .semaphoreCount = 1,
+            .pSemaphores = &self.handle,
+            .pValues = &counter,
+        }, timeout));
+    }
+
+    pub fn signalTimeline(self: *Self, counter: u64) !void {
+        try check(c.vkSignalSemaphore(self.gfx.device.handle, &c.VkSemaphoreSignalInfo{
+            .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO,
+            .semaphore = self.handle,
+            .value = counter,
+        }));
+    }
+};
+
 pub const RenderTarget = struct {
     image: *Image,
     clearValue: ?c.VkClearValue = null,
@@ -332,7 +388,6 @@ pub const Commands = struct {
     handle: c.VkCommandBuffer = null,
     pool: c.VkCommandPool = null,
     fence: c.VkFence = null,
-    submitWaitSemaphore: c.VkSemaphore = null,
     gfx: *Gfx,
 
     pub const Self = @This();
@@ -353,14 +408,10 @@ pub const Commands = struct {
             .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
             .flags = c.VK_FENCE_CREATE_SIGNALED_BIT,
         }, gfx.allocCB, &self.fence));
-        try check(c.vkCreateSemaphore(gfx.device.handle, &c.VkSemaphoreCreateInfo{
-            .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-        }, gfx.allocCB, &self.submitWaitSemaphore));
         return self;
     }
 
     pub fn deinit(self: *Self) void {
-        c.vkDestroySemaphore(self.gfx.device.handle, self.submitWaitSemaphore, self.gfx.allocCB);
         c.vkDestroyFence(self.gfx.device.handle, self.fence, self.gfx.allocCB);
         c.vkFreeCommandBuffers(self.gfx.device.handle, self.pool, 1, &self.handle);
         c.vkDestroyCommandPool(self.gfx.device.handle, self.pool, self.gfx.allocCB);
@@ -557,7 +608,7 @@ pub const Commands = struct {
         });
     }
 
-    pub fn submit(self: *Self, waitSemaphore: c.VkSemaphore) !void {
+    pub fn submit(self: *Self, waitSemaphore: ?*Semaphore) !void {
         try check(c.vkQueueSubmit2(
             self.gfx.device.universalQueue,
             1,
@@ -566,7 +617,7 @@ pub const Commands = struct {
                 .waitSemaphoreInfoCount = @intFromBool(waitSemaphore != null),
                 .pWaitSemaphoreInfos = &c.VkSemaphoreSubmitInfo{
                     .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                    .semaphore = waitSemaphore,
+                    .semaphore = if (waitSemaphore != null) waitSemaphore.?.handle else null,
                     .stageMask = c.VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
                 },
                 .commandBufferInfoCount = 1,
@@ -743,7 +794,7 @@ pub const Swapchain = struct {
         return width == self.images[0].desc.width and height == self.images[0].desc.height;
     }
 
-    pub fn acquireNextImage(self: *Self, semaphore: c.VkSemaphore) !?*Image {
+    pub fn acquireNextImage(self: *Self, semaphore: *Semaphore) !?*Image {
         if (self.handle == null)
             return null;
         var imgIndex: u32 = 0;
@@ -752,7 +803,7 @@ pub const Swapchain = struct {
             .swapchain = self.handle,
             .deviceMask = 1,
             .timeout = std.math.maxInt(u64),
-            .semaphore = semaphore,
+            .semaphore = semaphore.handle,
         }, &imgIndex)) catch |err| switch (err) {
             error.vk_suboptimal_khr => 
                 self.needsRecreate = true,
@@ -764,7 +815,7 @@ pub const Swapchain = struct {
         return &self.images[imgIndex];
     }
 
-    pub fn present(self: *Self, image: *Image, waitSemaphore: c.VkSemaphore) !void {
+    pub fn present(self: *Self, image: *Image, waitSemaphore: ?*Semaphore) !void {
         const imgIndex = image - self.images.ptr;
         try check(c.vkQueuePresentKHR(self.gfx.device.universalQueue, &c.VkPresentInfoKHR{
             .sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
@@ -772,7 +823,7 @@ pub const Swapchain = struct {
             .pSwapchains = &self.handle,
             .pImageIndices = @ptrCast(&imgIndex),
             .waitSemaphoreCount = @intFromBool(waitSemaphore != null),
-            .pWaitSemaphores = &[_]c.VkSemaphore{waitSemaphore},
+            .pWaitSemaphores = if (waitSemaphore != null) &waitSemaphore.?.handle else null,
         }));
     }
 };

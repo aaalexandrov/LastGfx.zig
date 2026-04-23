@@ -10,6 +10,24 @@ const CommandsDeinit = struct {
 };
 const CommandsPtr = rc.SharedPtr(vk.Commands, CommandsDeinit.deinit);
 
+const SubmitInfo = struct {
+    cmds: vk.Commands,
+    swapImageSemaphore: vk.Semaphore,
+
+    const Self = @This();
+    fn init(gfx: *vk.Gfx) !Self {
+        return Self{
+            .cmds = try vk.Commands.init(gfx),
+            .swapImageSemaphore = try vk.Semaphore.init(gfx, null),
+        };
+    }
+    fn deinit(self: *Self) !void {
+        try self.cmds.waitFinished();
+        self.cmds.deinit();
+        self.swapImageSemaphore.deinit();
+    }
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer if (gpa.deinit() == .leak) {
@@ -83,7 +101,6 @@ pub fn main() !void {
     };
     @as(*InputBuffer, @ptrCast(@alignCast(buffer.hostAddress))).* = bufContent;
 
-
     {
         var cmds = try vk.Commands.init(&gfx);
         defer cmds.deinit();
@@ -134,13 +151,11 @@ pub fn main() !void {
         std.log.info("Frames: {}, seconds: {d:1.3}, average FPS: {d:1.3}", .{frames, elapsed, @as(f64, @floatFromInt(frames)) / elapsed});
     }
 
-    var commands = try std.ArrayList(vk.Commands).initCapacity(gfx.alloc, 8);
+    var commands = try std.ArrayList(SubmitInfo).initCapacity(gfx.alloc, 8);
     var commandsIndex: u8 = 0;
     defer {
-        for (commands.items) |*cmds| {
-            cmds.waitFinished() catch {};
-            cmds.deinit();
-        } 
+        for (commands.items) |*cmds| 
+            cmds.deinit() catch {};
         commands.deinit(gfx.alloc);
     }
 
@@ -168,13 +183,14 @@ pub fn main() !void {
 
         var swapchainImage: ?*vk.Image = null;
         if (swapchain.isValid()) {
-            const cmds = &commands.items[commandsIndex];
-            try cmds.waitFinished();
-            swapchainImage = try swapchain.acquireNextImage(cmds.submitWaitSemaphore);
+            const submit = &commands.items[commandsIndex];
+            try submit.cmds.waitFinished();
+            swapchainImage = try swapchain.acquireNextImage(&submit.swapImageSemaphore);
         }
 
         if (swapchainImage) |swapImage| {
-            const cmds = &commands.items[commandsIndex];
+            const submit = &commands.items[commandsIndex];
+            const cmds = &submit.cmds;
             try cmds.begin();
 
             cmds.bindDescriptorHeap(&samplerHeap);
@@ -208,7 +224,7 @@ pub fn main() !void {
             cmds.imageBarrier(swapImage, .{.attachmentWrite = true}, .Graphics, .{.present = true}, .Graphics);
 
             try cmds.end();
-            try cmds.submit(cmds.submitWaitSemaphore);
+            try cmds.submit(&submit.swapImageSemaphore);
             commandsIndex = (commandsIndex + 1) % @as(@TypeOf(commandsIndex), @intCast(commands.items.len));
 
             swapchain.present(swapImage, null) catch {};
@@ -218,10 +234,10 @@ pub fn main() !void {
             try swapchain.recreate();
 
             for (commands.items) |*cmd|
-                cmd.deinit();
+                try cmd.deinit();
             try commands.resize(gfx.alloc, swapchain.images.len);
             for (commands.items) |*cmd|
-                cmd.* = try vk.Commands.init(&gfx);
+                cmd.* = try SubmitInfo.init(&gfx);
 
             commandsIndex = 0;
         }
