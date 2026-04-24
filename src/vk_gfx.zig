@@ -440,15 +440,32 @@ pub const Commands = struct {
         }
     }
 
-    pub fn updateDescriptorHeap(self: *Self, descHeap: *const DescriptorHeap) void {
-        self.copyBuffer(&descHeap.cpuBuffer, &descHeap.deviceBuffer, &[_]c.VkBufferCopy2{
-            .{
+    pub fn updateDescriptorHeap(self: *Self, descHeap: *DescriptorHeap, stagingBuffer: *Buffer) !void {
+        std.debug.assert(stagingBuffer.desc.usage.hostWrite and stagingBuffer.desc.usage.transferSrc);
+        std.debug.assert(stagingBuffer.desc.size >= descHeap.updateSrcSlots.items.len);
+
+        @memcpy(stagingBuffer.hostAddress.?[0..descHeap.updateSrcSlots.items.len], descHeap.updateSrcSlots.items);
+
+        const copy2 = try self.gfx.alloc.alloc(c.VkBufferCopy2, descHeap.updateDstToSrcSlot.count());
+        defer self.gfx.alloc.free(copy2);
+
+        // TODO: sort the copies - by source or destination slot? then coallesce consequtive copies into a single entry?
+        var count: usize = 0;
+        var iter = descHeap.updateDstToSrcSlot.iterator();
+        while (iter.next()) |entry| : (count += 1) {
+            const dstSlot = entry.key_ptr.*;
+            const srcSlot = entry.value_ptr.*;
+            copy2[count] = .{
                 .sType = c.VK_STRUCTURE_TYPE_BUFFER_COPY_2,
-                .srcOffset = 0,
-                .dstOffset = 0,
-                .size = descHeap.deviceBuffer.desc.size - descHeap.reservedSize,
-            },
-        });
+                .srcOffset = srcSlot * descHeap.maxDescriptorSize,
+                .dstOffset = dstSlot * descHeap.maxDescriptorSize,
+                .size = descHeap.maxDescriptorSize,
+            };
+        }
+
+        descHeap.clearStoredUpdates();
+
+        self.copyBuffer(stagingBuffer, &descHeap.deviceBuffer, copy2);
     }
 
     pub fn renderBegin(self: *Self, colorTargets: []const RenderTarget, depthStencilTarget: ?RenderTarget) !void {
@@ -1489,25 +1506,23 @@ pub const ResourcePtr = union(enum) {
     image: *Image,
 };
 
-fn alignToPowerOf2(x: anytype) @TypeOf(x) {
-    const T = @TypeOf(x);
-    return @as(T, @intCast(1)) << @intCast(@bitSizeOf(T) - @clz(x - 1));
-}
-
 pub const DescriptorHeap = struct {
     deviceBuffer: Buffer,
-    cpuBuffer: Buffer,
     kind: Kind,
     maxDescriptorSize: u64,
     reservedSize: u64,
     bufferDescriptorsPerSlot: u32,
     imageDescriptorsPerSlot: u32,
+    updateSrcSlots: ByteArrayList,
+    updateDstToSrcSlot: U64HashMap,
 
     pub const Kind = enum {
         Sampler,
         Resource,
     };
 
+    const ByteArrayList = std.array_list.Aligned(u8, null);
+    const U64HashMap = std.array_hash_map.AutoArrayHashMapUnmanaged(u64, u64);
     const Self = @This();
 
     pub fn init(gfx: *Gfx, kind: Kind, numDescriptors: u64) !Self {
@@ -1546,34 +1561,39 @@ pub const DescriptorHeap = struct {
                 .size = bufferSize,
                 .usage = usage,
             }, maxDescriptorAlignment),
-            .cpuBuffer = try Buffer.init(gfx, &.{
-                .size = bufferSize,
-                .usage = Usage{.hostWrite = true, .transferSrc = true},
-            }, 0),
             .kind = kind,
             .maxDescriptorSize = maxDescriptorSize,
             .reservedSize = reservedSize,
             .bufferDescriptorsPerSlot = if (kind == .Resource) @intCast(maxDescriptorSize / gfx.physical.descriptorHeapProps.bufferDescriptorSize) else 0,
             .imageDescriptorsPerSlot = if (kind == .Resource) @intCast(maxDescriptorSize / gfx.physical.descriptorHeapProps.imageDescriptorSize) else 0,
+            .updateSrcSlots = try ByteArrayList.initCapacity(gfx.alloc, 16 * maxDescriptorSize),
+            .updateDstToSrcSlot = try U64HashMap.init(gfx.alloc, &[_]u64{}, &[_]u64{}),
         };
 
         return self;
     }
 
     pub fn deinit(self: *Self) void {
+        self.updateDstToSrcSlot.deinit(self.deviceBuffer.gfx.alloc);
+        self.updateSrcSlots.deinit(self.deviceBuffer.gfx.alloc);
         self.deviceBuffer.deinit();
-        self.cpuBuffer.deinit();
     }
 
     pub fn getNumSlots(self: *const Self) u64 {
         return (self.deviceBuffer.desc.size - self.reservedSize) / self.maxDescriptorSize;
     }
 
-    fn getDescriptorHostAddressRange(self: *const Self, start: u64, num: u64) c.VkHostAddressRangeEXT {
-        std.debug.assert(start + num <= self.getNumSlots());
+    fn getUpdateHostAddressRange(self: *Self, dstSlot: u64) !c.VkHostAddressRangeEXT {
+        std.debug.assert(dstSlot < self.getNumSlots());
+        const srcSlot = self.updateDstToSrcSlot.get(dstSlot) orelse newSlot: {
+            const lastSlot = self.updateSrcSlots.items.len / self.maxDescriptorSize;
+            try self.updateSrcSlots.resize(self.deviceBuffer.gfx.alloc, self.updateSrcSlots.items.len + self.maxDescriptorSize);
+            try self.updateDstToSrcSlot.put(self.deviceBuffer.gfx.alloc, dstSlot, lastSlot);
+            break :newSlot lastSlot;
+        };
         return .{
-            .address = &self.cpuBuffer.hostAddress.?[start * self.maxDescriptorSize],
-            .size = num * self.maxDescriptorSize,
+            .address = &self.updateSrcSlots.items[srcSlot * self.maxDescriptorSize],
+            .size = self.maxDescriptorSize,
         };
     }
 
@@ -1585,7 +1605,7 @@ pub const DescriptorHeap = struct {
         var hostAddresses = try gfx.alloc.alloc(c.VkHostAddressRangeEXT, samplerInfos.len);
         defer gfx.alloc.free(hostAddresses);
         for (0..samplerInfos.len) |i| 
-            hostAddresses[i] = self.getDescriptorHostAddressRange(startIndex + i, 1);
+            hostAddresses[i] = try self.getUpdateHostAddressRange(startIndex + i);
 
         try check(gfx.writeSamplerDescriptorsEXT.?(gfx.device.handle, @intCast(samplerInfos.len), samplerInfos.ptr, hostAddresses.ptr));
     }
@@ -1612,7 +1632,7 @@ pub const DescriptorHeap = struct {
         defer gfx.alloc.free(resourceDescInfos);
 
         for (0..resources.len) |i| {
-            hostAddresses[i] = self.getDescriptorHostAddressRange(startSlot + i, 1);
+            hostAddresses[i] = try self.getUpdateHostAddressRange(startSlot + i);
             switch (resources[i]) {
                 .buffer => |buf| {
                     buf.writeDescriptorData(&resourceDescData[i], &resourceDescInfos[i]);
@@ -1624,7 +1644,12 @@ pub const DescriptorHeap = struct {
             }
         }
 
-        try check(gfx.writeResourceDescriptorsEXT.?(gfx.device.handle, @intCast(resources.len), resourceDescInfos.ptr, hostAddresses.ptr));        
+        try check(gfx.writeResourceDescriptorsEXT.?(gfx.device.handle, @intCast(resources.len), resourceDescInfos.ptr, hostAddresses.ptr));
+    }
+
+    fn clearStoredUpdates(self: *Self) void {
+        self.updateSrcSlots.clearRetainingCapacity();
+        self.updateDstToSrcSlot.clearRetainingCapacity();
     }
 };
 

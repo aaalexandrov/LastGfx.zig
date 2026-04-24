@@ -107,8 +107,19 @@ pub fn main() !void {
 
         try cmds.begin();
 
-        cmds.updateDescriptorHeap(&samplerHeap);
-        cmds.updateDescriptorHeap(&resourceHeap);
+        var samplerUpdateStaging = try vk.Buffer.init(&gfx, &.{
+            .size = samplerHeap.updateSrcSlots.items.len, 
+            .usage = .{.hostWrite = true, .transferSrc = true},
+        }, samplerHeap.maxDescriptorSize);
+        defer samplerUpdateStaging.deinit();
+        try cmds.updateDescriptorHeap(&samplerHeap, &samplerUpdateStaging);
+
+        var resourceUpdateStaging = try vk.Buffer.init(&gfx, &.{
+            .size = resourceHeap.updateSrcSlots.items.len, 
+            .usage = .{.hostWrite = true, .transferSrc = true},
+        }, resourceHeap.maxDescriptorSize);
+        defer resourceUpdateStaging.deinit();
+        try cmds.updateDescriptorHeap(&resourceHeap, &resourceUpdateStaging);
 
         cmds.imageBarrier(&image, .{}, .Graphics, .{.transferDst = true}, .Graphics);
 
