@@ -440,11 +440,11 @@ pub const Commands = struct {
         }
     }
 
-    pub fn updateDescriptorHeap(self: *Self, descHeap: *DescriptorHeap, stagingBuffer: *Buffer) !void {
+    pub fn updateDescriptorHeap(self: *Self, descHeap: *DescriptorHeap, stagingBuffer: *Buffer, offsetInBuffer: u64) !void {
         std.debug.assert(stagingBuffer.desc.usage.hostWrite and stagingBuffer.desc.usage.transferSrc);
-        std.debug.assert(stagingBuffer.desc.size >= descHeap.updateSrcSlots.items.len);
+        std.debug.assert(offsetInBuffer + descHeap.updateSrcSlots.items.len <= stagingBuffer.desc.size);
 
-        @memcpy(stagingBuffer.hostAddress.?[0..descHeap.updateSrcSlots.items.len], descHeap.updateSrcSlots.items);
+        @memcpy(stagingBuffer.hostAddress.?[offsetInBuffer..offsetInBuffer + descHeap.updateSrcSlots.items.len], descHeap.updateSrcSlots.items);
 
         const copy2 = try self.gfx.alloc.alloc(c.VkBufferCopy2, descHeap.updateDstToSrcSlot.count());
         defer self.gfx.alloc.free(copy2);
@@ -976,6 +976,10 @@ pub const Pipeline = struct {
                 .module = compShader.handle,
                 .pName = "main",
             },
+            .pNext = @constCast(&c.VkPipelineCreateFlags2CreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO,
+                .flags = c.VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT,
+            }),
         }, gfx.allocCB, &self.handle));
         self.name = try gfx.alloc.dupeZ(u8, name);
         return self;
@@ -1096,13 +1100,14 @@ pub const Buffer = struct {
         };
     }
 
-    fn writeDescriptorData(self: *const Self, resourceData: *DescriptorHeap.ResourceData, descInfo: *c.VkResourceDescriptorInfoEXT) void {
-        resourceData.* = .{ .buffer = self.getDeviceAddressRange() };
+    fn writeDescriptorData(self: *const Self, descInfo: *c.VkResourceDescriptorInfoEXT, alloc: std.mem.Allocator) !void {
+        const addressRange = try alloc.create(c.VkDeviceAddressRangeEXT);
+        addressRange.* = self.getDeviceAddressRange();
         descInfo.* = .{
             .sType = c.VK_STRUCTURE_TYPE_RESOURCE_DESCRIPTOR_INFO_EXT,
             .type = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .data = .{
-                .pAddressRange = &resourceData.buffer
+                .pAddressRange = addressRange
             },
         };
     }
@@ -1293,22 +1298,20 @@ pub const Image = struct {
         };
     }
 
-    fn writeDescriptorData(self: *const Self, resourceData: *DescriptorHeap.ResourceData, descInfo: *c.VkResourceDescriptorInfoEXT) void {
-        resourceData.* = .{
-            .image = .{
-                .viewCreateInfo = self.viewCreateInfo(),
-                .descInfo = .{
-                    .sType = c.VK_STRUCTURE_TYPE_IMAGE_DESCRIPTOR_INFO_EXT,
-                    .pView = &resourceData.image.viewCreateInfo,
-                    .layout = c.VK_IMAGE_LAYOUT_GENERAL,
-                },
-            },
+    fn writeDescriptorData(self: *const Self, descInfo: *c.VkResourceDescriptorInfoEXT, alloc: std.mem.Allocator) !void {
+        const viewInfo = try alloc.create(c.VkImageViewCreateInfo);
+        viewInfo.* = self.viewCreateInfo();
+        const imageDescInfo = try alloc.create(c.VkImageDescriptorInfoEXT);
+        imageDescInfo.* = .{
+            .sType = c.VK_STRUCTURE_TYPE_IMAGE_DESCRIPTOR_INFO_EXT,
+            .pView = viewInfo,
+            .layout = c.VK_IMAGE_LAYOUT_GENERAL,
         };
         descInfo.* = .{
             .sType = c.VK_STRUCTURE_TYPE_RESOURCE_DESCRIPTOR_INFO_EXT,
             .type = descriptorType(self.desc.usage),
             .data = .{
-                .pImage = &resourceData.image.descInfo, 
+                .pImage = imageDescInfo, 
             },
         };
     }
@@ -1610,14 +1613,6 @@ pub const DescriptorHeap = struct {
         try check(gfx.writeSamplerDescriptorsEXT.?(gfx.device.handle, @intCast(samplerInfos.len), samplerInfos.ptr, hostAddresses.ptr));
     }
 
-    const ResourceData = union(enum) {
-        image: struct {
-            viewCreateInfo: c.VkImageViewCreateInfo,
-            descInfo: c.VkImageDescriptorInfoEXT,
-        },
-        buffer: c.VkDeviceAddressRangeEXT,
-    };
-
     pub fn writeResourceDescriptors(self: *Self, startSlot: u64, resources: []const ResourcePtr) !void {
         std.debug.assert(self.kind == .Resource);
         
@@ -1626,21 +1621,19 @@ pub const DescriptorHeap = struct {
         var hostAddresses = try gfx.alloc.alloc(c.VkHostAddressRangeEXT, resources.len);
         defer gfx.alloc.free(hostAddresses);
 
-        var resourceDescData = try gfx.alloc.alloc(ResourceData, resources.len);
-        defer gfx.alloc.free(resourceDescData);
-        var resourceDescInfos = try gfx.alloc.alloc(c.VkResourceDescriptorInfoEXT, resources.len);
-        defer gfx.alloc.free(resourceDescInfos);
+        var arena = std.heap.ArenaAllocator.init(gfx.alloc);
+        defer arena.deinit();
+        const arenaAlloc = arena.allocator();
+
+        var resourceDescInfos = try arenaAlloc.alloc(c.VkResourceDescriptorInfoEXT, resources.len);
 
         for (0..resources.len) |i| {
             hostAddresses[i] = try self.getUpdateHostAddressRange(startSlot + i);
             switch (resources[i]) {
-                .buffer => |buf| {
-                    buf.writeDescriptorData(&resourceDescData[i], &resourceDescInfos[i]);
+                .none => unreachable,
+                inline else => |res| {
+                    try res.writeDescriptorData(&resourceDescInfos[i], arenaAlloc);
                 },
-                .image => |img| {
-                    img.writeDescriptorData(&resourceDescData[i], &resourceDescInfos[i]);
-                },
-                else => unreachable,
             }
         }
 

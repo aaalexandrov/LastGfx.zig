@@ -112,14 +112,14 @@ pub fn main() !void {
             .usage = .{.hostWrite = true, .transferSrc = true},
         }, samplerHeap.maxDescriptorSize);
         defer samplerUpdateStaging.deinit();
-        try cmds.updateDescriptorHeap(&samplerHeap, &samplerUpdateStaging);
+        try cmds.updateDescriptorHeap(&samplerHeap, &samplerUpdateStaging, 0);
 
         var resourceUpdateStaging = try vk.Buffer.init(&gfx, &.{
             .size = resourceHeap.updateSrcSlots.items.len, 
             .usage = .{.hostWrite = true, .transferSrc = true},
         }, resourceHeap.maxDescriptorSize);
         defer resourceUpdateStaging.deinit();
-        try cmds.updateDescriptorHeap(&resourceHeap, &resourceUpdateStaging);
+        try cmds.updateDescriptorHeap(&resourceHeap, &resourceUpdateStaging, 0);
 
         cmds.imageBarrier(&image, .{}, .Graphics, .{.transferDst = true}, .Graphics);
 
