@@ -95,7 +95,6 @@ pub const Gfx = struct {
 
         self.physical = try self.selectPhysicalDevice();
 
-
         std.log.info("GPU: {s}, driver ver.{s}, conformance ver.{}.{}.{}.{}, Vulkan ver.{}.{}.{}.{}\n", .{
             self.physical.props.properties.deviceName,
             self.physical.driverProps.driverInfo,
@@ -457,7 +456,7 @@ pub const Commands = struct {
             const srcSlot = entry.value_ptr.*;
             copy2[count] = .{
                 .sType = c.VK_STRUCTURE_TYPE_BUFFER_COPY_2,
-                .srcOffset = srcSlot * descHeap.maxDescriptorSize,
+                .srcOffset = srcSlot * descHeap.maxDescriptorSize + offsetInBuffer,
                 .dstOffset = dstSlot * descHeap.maxDescriptorSize,
                 .size = descHeap.maxDescriptorSize,
             };

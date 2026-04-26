@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @import("cimport.zig").c;
 const vk = @import("vk_gfx.zig");
 const rc = @import("rc_ptr.zig");
+const zstbi = @import("zstbi");
 
 const CommandsDeinit = struct {
     fn deinit(cmds: *vk.Commands, _: std.mem.Allocator) void {
@@ -9,6 +10,51 @@ const CommandsDeinit = struct {
     }
 };
 const CommandsPtr = rc.SharedPtr(vk.Commands, CommandsDeinit.deinit);
+
+const UploadBuffer = struct {
+    buffer: vk.Buffer,
+    offset: u64 = 0,
+
+    pub const Alloc = struct {
+        buffer: *vk.Buffer, 
+        offset: u64,
+        size: u64,
+
+        pub fn slice(self: @This()) []u8 {
+            return self.buffer.hostAddress.?[self.offset..self.offset + self.size];
+        }
+    };
+    pub const Self = @This();
+
+    pub fn init(gfx: *vk.Gfx, size: u64) !Self {
+        return Self {
+            .buffer = try vk.Buffer.init(gfx, &.{
+                .size = size,
+                .usage = .{.hostWrite = true, .transferSrc = true},
+            }, 16),
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.buffer.deinit();
+    }
+
+    pub fn alloc(self: *Self, size: u64) !Alloc {
+        if (self.offset + size > self.buffer.desc.size)
+            return error.BufferNotBigEnough;
+        const start = self.offset;
+        self.offset += size;
+        return .{
+            .buffer = &self.buffer, 
+            .offset = start,
+            .size = size,
+        };
+    }
+
+    pub fn reset(self: *Self) void {
+        self.offset = 0;
+    }
+};
 
 const SubmitInfo = struct {
     cmds: vk.Commands,
@@ -45,6 +91,9 @@ pub fn main() !void {
     try gfx.init(gpa.allocator(), activateDebugLayers);
     defer gfx.deinit();
 
+    zstbi.init(gfx.alloc);
+    defer zstbi.deinit();
+
     var swapchain = try vk.Swapchain.init(&gfx, window);
     defer swapchain.deinit() catch {};
 
@@ -79,9 +128,6 @@ pub fn main() !void {
     });
     defer image.deinit();
 
-    var linearSampler = try vk.Sampler.init(&gfx, &.{});
-    defer linearSampler.deinit();
-
     try resourceHeap.writeResourceDescriptors(0, &[_]vk.ResourcePtr{
         .{ .image = &image },
         .{ .buffer = &buffer },
@@ -102,33 +148,24 @@ pub fn main() !void {
     @as(*InputBuffer, @ptrCast(@alignCast(buffer.hostAddress))).* = bufContent;
 
     {
+        var staging = try UploadBuffer.init(&gfx, 1024*1024);
+        defer staging.deinit();
+
         var cmds = try vk.Commands.init(&gfx);
         defer cmds.deinit();
 
         try cmds.begin();
 
-        var samplerUpdateStaging = try vk.Buffer.init(&gfx, &.{
-            .size = samplerHeap.updateSrcSlots.items.len, 
-            .usage = .{.hostWrite = true, .transferSrc = true},
-        }, samplerHeap.maxDescriptorSize);
-        defer samplerUpdateStaging.deinit();
-        try cmds.updateDescriptorHeap(&samplerHeap, &samplerUpdateStaging, 0);
+        const samplerUpload = try staging.alloc(samplerHeap.updateSrcSlots.items.len);
+        try cmds.updateDescriptorHeap(&samplerHeap, samplerUpload.buffer, samplerUpload.offset);
 
-        var resourceUpdateStaging = try vk.Buffer.init(&gfx, &.{
-            .size = resourceHeap.updateSrcSlots.items.len, 
-            .usage = .{.hostWrite = true, .transferSrc = true},
-        }, resourceHeap.maxDescriptorSize);
-        defer resourceUpdateStaging.deinit();
-        try cmds.updateDescriptorHeap(&resourceHeap, &resourceUpdateStaging, 0);
+        const resourcesUpload = try staging.alloc(resourceHeap.updateSrcSlots.items.len);
+        try cmds.updateDescriptorHeap(&resourceHeap, resourcesUpload.buffer, resourcesUpload.offset);
 
         cmds.imageBarrier(&image, .{}, .Graphics, .{.transferDst = true}, .Graphics);
 
-        var bufStaging = try vk.Buffer.init(&gfx, &.{
-                .size = @intCast(image.desc.width * image.desc.height * 4), 
-                .usage = vk.Usage{.transferSrc = true, .hostWrite = true},
-            }, 4);
-        defer bufStaging.deinit();
-        var pixel: [*]u8 = bufStaging.hostAddress.?;
+        const pixelsUpload = try staging.alloc(@intCast(image.desc.width * image.desc.height * 4));
+        var pixel: [*]u8 = staging.buffer.hostAddress.? + pixelsUpload.offset;
         for (0..@intCast(image.desc.height)) |y| {
             for (0..@intCast(image.desc.width)) |x| {
                 const val: u8 = @intCast((y / 8 + x / 8) % 2 * 255);
@@ -137,9 +174,10 @@ pub fn main() !void {
             }
         }
 
-        cmds.copyBufferToImage(&bufStaging, &image, &[_]c.VkBufferImageCopy2{
+        cmds.copyBufferToImage(pixelsUpload.buffer, &image, &[_]c.VkBufferImageCopy2{
             .{
                 .sType = c.VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
+                .bufferOffset = pixelsUpload.offset,
                 .imageSubresource = .{
                     .aspectMask = image.desc.imageAspect(),
                     .mipLevel = 0,
@@ -255,3 +293,33 @@ pub fn main() !void {
     }
 }
 
+fn LoadTexture(gfx: *vk.Gfx, filename: [:0]u8, usage: vk.Usage, cmds: *vk.Commands, staging: *UploadBuffer) !vk.Image {
+    var loaded = try zstbi.Image.loadFromFile(filename, 4);
+    defer loaded.deinit();
+
+    const image = try vk.Image.init(gfx, .{
+        .format = c.VK_FORMAT_R8G8B8A8_UNORM,
+        .width = loaded.width,
+        .height = loaded.height,
+        .usage = usage,
+    });
+
+    const pixels = try staging.alloc(loaded.width * loaded.height * 4);
+    @memcpy(pixels.slice(), loaded.data[0 .. pixels.size]);
+
+    cmds.copyBufferToImage(pixels.buffer, &image, &[_]c.VkBufferImageCopy2{
+        .{
+            .sType = c.VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
+            .bufferOffset = pixels.offset,
+            .imageSubresource = .{
+                .aspectMask = image.desc.imageAspect(),
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+            .imageExtent = image.desc.extent3D(),
+        },
+    });
+
+    return image;
+}

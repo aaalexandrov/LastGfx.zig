@@ -54,6 +54,9 @@ pub fn build(b: *std.Build) !void {
     const vk_lib_name = if (target.result.os.tag == .windows) "vulkan-1" else "vulkan";
     exe_mod.linkSystemLibrary(vk_lib_name, .{});
 
+    const zstbi = b.dependency("zstbi", .{});
+    exe_mod.addImport("zstbi", zstbi.module("root"));
+
     // This creates another `std.Build.Step.Compile`, but this one builds an executable
     // rather than a static library.
     const exe = b.addExecutable(.{
@@ -64,6 +67,13 @@ pub fn build(b: *std.Build) !void {
     });
 
     try compileShaders(b, "src/shaders", "bin/shaders");
+
+    // copy contents of data/ to the output dir
+    b.installDirectory(.{
+        .install_dir = .prefix,
+        .source_dir = b.path("data"),
+        .install_subdir = "bin/data",
+    });
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
