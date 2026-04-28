@@ -42,7 +42,9 @@ pub const Gfx = struct {
     pub const API_VERSION = c.VK_API_VERSION_1_4;
     pub const Self = @This();
 
-    pub fn init(self: *Self, allocator: std.mem.Allocator, debug: bool) !void {
+    pub fn init(allocator: std.mem.Allocator, debug: bool) !Self {
+        var self: Self = undefined;
+
         self.alloc = allocator;
         self.allocCB = null;
 
@@ -61,7 +63,6 @@ pub const Gfx = struct {
             .messageSeverity = c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
             .messageType = c.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | c.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | c.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
             .pfnUserCallback = &DebugCallback,
-            .pUserData = self,
         };
         if (debug) {
             try layers.append(self.alloc, "VK_LAYER_KHRONOS_validation");
@@ -122,6 +123,8 @@ pub const Gfx = struct {
             .pAllocationCallbacks = self.allocCB,
         }, &self.vma));
         std.debug.assert(self.vma != null);
+
+        return self;
     }
 
     pub fn deinit(self: *Self) void {
@@ -304,6 +307,22 @@ pub const PhysicalDevice = struct {
 
     fn deinit(self: *Self, alloc: std.mem.Allocator) void {
         alloc.free(self.extensions);
+    }
+
+    pub fn maxSamplerDescriptors(self: *const Self) u64 {
+        return (self.descriptorHeapProps.maxSamplerHeapSize - self.descriptorHeapProps.minSamplerHeapReservedRange) / self.descriptorHeapProps.samplerDescriptorSize;
+    }
+
+    pub fn maxResourceDescriptors(self: *const Self) u64 {
+        return (self.descriptorHeapProps.maxResourceHeapSize - self.descriptorHeapProps.minResourceHeapReservedRange) / self.maxResourceDescriptorSize();
+    }
+
+    pub fn maxResourceDescriptorSize(self: *const Self) u64 {
+        return @max(self.descriptorHeapProps.bufferDescriptorSize, self.descriptorHeapProps.imageDescriptorSize);
+    }
+
+    pub fn maxResourceDescriptorAlignment(self: *const Self) u64 {
+        return @max(self.descriptorHeapProps.bufferDescriptorAlignment, self.descriptorHeapProps.imageDescriptorAlignment);
     }
 };
 
@@ -881,7 +900,7 @@ pub const Shader = struct {
 
 pub const Pipeline = struct {
     handle: c.VkPipeline = null,
-    name: [:0]const u8 = "",
+    name: []const u8 = "",
     kind: Kind,
 
     pub const Kind = enum {
@@ -891,7 +910,7 @@ pub const Pipeline = struct {
 
     pub const Self = @This();
 
-    pub fn initGraphics(gfx: *Gfx, meshShader: *const Shader, fragShader: *const Shader, name: [:0]const u8) !Self {
+    pub fn initGraphics(gfx: *Gfx, meshShader: *const Shader, fragShader: *const Shader, name: []const u8) !Self {
         var self = Self{
             .kind = .Graphics,
         };
@@ -957,7 +976,7 @@ pub const Pipeline = struct {
                 }),
             }),
         }, gfx.allocCB, &self.handle));
-        self.name = try gfx.alloc.dupeZ(u8, name);
+        self.name = try gfx.alloc.dupe(u8, name);
         return self;
     }
 
@@ -1540,8 +1559,8 @@ pub const DescriptorHeap = struct {
                 maxHeapSize = gfx.physical.descriptorHeapProps.maxSamplerHeapSize;
             },
             .Resource => {
-                maxDescriptorSize = @max(gfx.physical.descriptorHeapProps.bufferDescriptorSize, gfx.physical.descriptorHeapProps.imageDescriptorSize);
-                maxDescriptorAlignment = @max(gfx.physical.descriptorHeapProps.bufferDescriptorAlignment, gfx.physical.descriptorHeapProps.imageDescriptorAlignment);
+                maxDescriptorSize = gfx.physical.maxResourceDescriptorSize();
+                maxDescriptorAlignment = gfx.physical.maxResourceDescriptorAlignment();
                 reservedSize = gfx.physical.descriptorHeapProps.minResourceHeapReservedRange;
                 maxHeapSize = gfx.physical.descriptorHeapProps.maxResourceHeapSize;
             },
