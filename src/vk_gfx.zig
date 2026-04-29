@@ -42,9 +42,7 @@ pub const Gfx = struct {
     pub const API_VERSION = c.VK_API_VERSION_1_4;
     pub const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, debug: bool) !Self {
-        var self: Self = undefined;
-
+    pub fn init(self: *Self, allocator: std.mem.Allocator, debug: bool) !void {
         self.alloc = allocator;
         self.allocCB = null;
 
@@ -63,6 +61,7 @@ pub const Gfx = struct {
             .messageSeverity = c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
             .messageType = c.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | c.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | c.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
             .pfnUserCallback = &DebugCallback,
+            .pUserData = self,
         };
         if (debug) {
             try layers.append(self.alloc, "VK_LAYER_KHRONOS_validation");
@@ -123,8 +122,6 @@ pub const Gfx = struct {
             .pAllocationCallbacks = self.allocCB,
         }, &self.vma));
         std.debug.assert(self.vma != null);
-
-        return self;
     }
 
     pub fn deinit(self: *Self) void {
@@ -1061,12 +1058,13 @@ pub const Buffer = struct {
 
     pub const Descriptor = struct {
         size: u64 = 0,
+        alignment: u64 = 16,
         usage: Usage = .{ .storageRead = true, .transferDst = true },
     };
 
     pub const Self = @This();
 
-    pub fn init(gfx: *Gfx, desc: *const Descriptor, alignment: u64) !Self {
+    pub fn init(gfx: *Gfx, desc: *const Descriptor) !Self {
         var self = Buffer{
             .desc = desc.*,
             .gfx = gfx,
@@ -1089,7 +1087,7 @@ pub const Buffer = struct {
                 .flags = getVmaAllocationCreateFlags(desc.usage),
                 .usage = c.VMA_MEMORY_USAGE_AUTO,
             },
-            alignment,
+            desc.alignment,
             &self.handle,
             &self.allocation, 
             &allocInfo
@@ -1580,8 +1578,9 @@ pub const DescriptorHeap = struct {
         const self = Self{
             .deviceBuffer = try Buffer.init(gfx, &.{
                 .size = bufferSize,
+                .alignment = maxDescriptorAlignment,
                 .usage = usage,
-            }, maxDescriptorAlignment),
+            }),
             .kind = kind,
             .maxDescriptorSize = maxDescriptorSize,
             .reservedSize = reservedSize,

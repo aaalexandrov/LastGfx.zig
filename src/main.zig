@@ -1,17 +1,7 @@
 const std = @import("std");
 const c = @import("cimport.zig").c;
 const vk = @import("vk_gfx.zig");
-const rc = @import("rc_ptr.zig");
-const zstbi = @import("zstbi");
 const r = @import("renderer.zig");
-
-const CommandsDeinit = struct {
-    fn deinit(cmds: *vk.Commands, _: std.mem.Allocator) void {
-        cmds.deinit();
-    }
-};
-const CommandsPtr = rc.SharedPtr(vk.Commands, CommandsDeinit.deinit);
-
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -34,7 +24,7 @@ pub fn main() !void {
     var buffer = try vk.Buffer.init(&rend.gfx, &.{
         .size = 1024,
         .usage = vk.Usage{.storageRead = true, .hostWrite = true},
-    }, 16);
+    });
     defer buffer.deinit();
 
     var image = try vk.Image.init(&rend.gfx, &.{
@@ -66,7 +56,7 @@ pub fn main() !void {
     @as(*InputBuffer, @ptrCast(@alignCast(buffer.hostAddress))).* = bufContent;
 
     {
-        var upload = try r.SubmitInfo.init(&rend.gfx, 1024*1024);
+        var upload = try r.SubmitInfo.init(&rend.gfx, 1024 * 1024);
         defer upload.deinit() catch {};
 
         try upload.cmds.begin();
@@ -74,7 +64,7 @@ pub fn main() !void {
         fontImage = try upload.loadTexture("data/font_rgba_10x20.png", .{.imageRead = true, .transferDst = true});
 
         try rend.samplerHeap.writeSamplerDescriptors(linearSamplerDescriptorIndex, &[_]c.VkSamplerCreateInfo{vk.Sampler.createInfo(&.{})});
-        const samplerUpload = try upload.staging.alloc(rend.samplerHeap.updateSrcSlots.items.len);
+        const samplerUpload = try upload.staging.alloc(rend.samplerHeap.updateSrcSlots.items.len, 1);
         try upload.cmds.updateDescriptorHeap(&rend.samplerHeap, samplerUpload.buffer, samplerUpload.offset);
 
         try rend.resourceHeap.writeResourceDescriptors(imageDescriptorIndex, &[_]vk.ResourcePtr{
@@ -82,12 +72,12 @@ pub fn main() !void {
             .{ .image = &fontImage },
             .{ .buffer = &buffer },
         });
-        const resourcesUpload = try upload.staging.alloc(rend.resourceHeap.updateSrcSlots.items.len);
+        const resourcesUpload = try upload.staging.alloc(rend.resourceHeap.updateSrcSlots.items.len, 1);
         try upload.cmds.updateDescriptorHeap(&rend.resourceHeap, resourcesUpload.buffer, resourcesUpload.offset);
 
         upload.cmds.imageBarrier(&image, .{}, .Graphics, .{.transferDst = true}, .Graphics);
 
-        const pixelsUpload = try upload.staging.alloc(@intCast(image.desc.width * image.desc.height * 4));
+        const pixelsUpload = try upload.staging.alloc(@intCast(image.desc.width * image.desc.height * 4), 1);
         var pixel: [*]u8 = pixelsUpload.buffer.hostAddress.? + pixelsUpload.offset;
         for (0..@intCast(image.desc.height)) |y| {
             for (0..@intCast(image.desc.width)) |x| {
