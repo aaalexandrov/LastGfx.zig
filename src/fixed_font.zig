@@ -7,7 +7,9 @@ const r = @import("renderer.zig");
 image: vk.Image,
 name: []u8,
 
-const Self = @This();
+pub var pipeline: vk.Pipeline = undefined;
+
+pub const Self = @This();
 
 pub fn init(fontName: []const u8, fontImage: vk.Image) !Self {
     return Self{
@@ -38,7 +40,7 @@ pub fn initFromFile(imagePath: [:0]const u8, submit: *r.SubmitInfo) !Self {
         .usage = .{.imageRead = true, .transferDst = true},
     });
 
-    submit.cmds.imageBarrier(&image, .{}, .Graphics, .{.transferDst = true}, .Graphics);
+    submit.cmds.imageBarrier(&image, .{}, .Graphics, .{.imageRead = true, .transferDst = true}, .Graphics);
 
     var dstOffs: usize = 0;
     for (0..cellsY) |cy| {
@@ -63,8 +65,6 @@ pub fn initFromFile(imagePath: [:0]const u8, submit: *r.SubmitInfo) !Self {
         },
     });
 
-    submit.cmds.imageBarrier(&image, .{.transferDst = true}, .Graphics, .{.imageRead = true}, .Graphics);
-
     return try init(imagePath, image);
 }
 
@@ -72,6 +72,18 @@ pub fn deinit(self: *Self) void {
     self.image.gfx.alloc.free(self.name);
     self.image.deinit();
 }
+
+pub fn initStatic(renderer: *r.Renderer, shaderPath: []const u8) !void {
+    pipeline = try renderer.loadGraphicsPipeline(shaderPath);
+}
+
+pub fn deinitStatic(renderer: *r.Renderer) void {
+    pipeline.deinit(&renderer.gfx);
+}
+
+// pub fn render(str: []const u8, startPos: [2]u32, pixelSize: [2]f32, color: [4]f32, submit: *r.SubmitInfo) !void {
+
+// }
 
 fn glyphSizeFromPath(imagePath: [:0]const u8) ![2]u32 {
     var nameSplit = std.mem.splitScalar(u8, imagePath, '.');
