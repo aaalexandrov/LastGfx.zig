@@ -16,9 +16,9 @@ pub fn init(fontName: []const u8, fontImage: vk.Image) !Self {
     };
 }
 
-pub fn initFromFile(imagePath: [:0]u8, submit: *r.SubmitInfo) !Self {
+pub fn initFromFile(imagePath: [:0]const u8, submit: *r.SubmitInfo) !Self {
     const glyphSize = try glyphSizeFromPath(imagePath);
-    const loaded = try zstbi.Image.loadFromFile(imagePath, 4);
+    var loaded = try zstbi.Image.loadFromFile(imagePath, 4);
     defer loaded.deinit();
 
     std.debug.assert(loaded.width % glyphSize[0] == 0);
@@ -31,8 +31,8 @@ pub fn initFromFile(imagePath: [:0]u8, submit: *r.SubmitInfo) !Self {
     const cellsY = loaded.height / glyphSize[1];
 
     var image = try vk.Image.init(submit.cmds.gfx, &vk.Image.Descriptor{
-        .width = glyphSize[0],
-        .height = glyphSize[1],
+        .width = @intCast(glyphSize[0]),
+        .height = @intCast(glyphSize[1]),
         .depth = -@as(i32, @intCast(cellsX * cellsY)),
         .format = c.VK_FORMAT_R8G8B8A8_UNORM,
         .usage = .{.imageRead = true, .transferDst = true},
@@ -40,7 +40,7 @@ pub fn initFromFile(imagePath: [:0]u8, submit: *r.SubmitInfo) !Self {
 
     submit.cmds.imageBarrier(&image, .{}, .Graphics, .{.transferDst = true}, .Graphics);
 
-    var dstOffs = 0;
+    var dstOffs: usize = 0;
     for (0..cellsY) |cy| {
         for (0..cellsX) |cx| {
             for (0..glyphSize[1]) |row| {
@@ -57,7 +57,7 @@ pub fn initFromFile(imagePath: [:0]u8, submit: *r.SubmitInfo) !Self {
             .bufferOffset = staging.offset,
             .imageSubresource = .{
                 .aspectMask = image.desc.imageAspect(),
-                .layerCount = 1,
+                .layerCount = @intCast(-image.desc.depth),
             },
             .imageExtent = image.desc.extent3D(),            
         },
@@ -73,8 +73,9 @@ pub fn deinit(self: *Self) void {
     self.image.deinit();
 }
 
-fn glyphSizeFromPath(imagePath: [:0]u8) ![2]u32 {
-    var name = std.mem.splitScalar(u8, imagePath, '.').next().?;
+fn glyphSizeFromPath(imagePath: [:0]const u8) ![2]u32 {
+    var nameSplit = std.mem.splitScalar(u8, imagePath, '.');
+    var name = nameSplit.next().?;
     for (name, 0..) |ch, i| {
         if ('0' <= ch and ch <= '9') {
             name = name[i..name.len];

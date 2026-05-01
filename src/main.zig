@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @import("cimport.zig").c;
 const vk = @import("vk_gfx.zig");
 const r = @import("renderer.zig");
+const Font = @import("fixed_font.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -34,9 +35,6 @@ pub fn main() !void {
     });
     defer image.deinit();
 
-    var fontImage: vk.Image = undefined;
-    defer fontImage.deinit();    
-
     const linearSamplerDescriptorIndex: u32 = 0;
 
     const imageDescriptorIndex = 0 * rend.resourceHeap.imageDescriptorsPerSlot;
@@ -55,13 +53,16 @@ pub fn main() !void {
     };
     @as(*InputBuffer, @ptrCast(@alignCast(buffer.hostAddress))).* = bufContent;
 
+    var font: Font = undefined;
+    defer font.deinit();
+
     {
         var upload = try r.SubmitInfo.init(&rend, 1024 * 1024);
         defer upload.deinit() catch {};
 
         try upload.cmds.begin();
 
-        fontImage = try upload.loadTexture("data/font_rgba_10x20.png", .{.imageRead = true, .transferDst = true});
+        font = try Font.initFromFile("data/font_rgba_10x20.png", &upload);
 
         try rend.samplerHeap.writeSamplerDescriptors(linearSamplerDescriptorIndex, &[_]c.VkSamplerCreateInfo{vk.Sampler.createInfo(&.{})});
         const samplerUpload = try upload.staging.alloc(rend.samplerHeap.updateSrcSlots.items.len, 1);
@@ -69,7 +70,7 @@ pub fn main() !void {
 
         try rend.resourceHeap.writeResourceDescriptors(imageDescriptorIndex, &[_]vk.ResourcePtr{
             .{ .image = &image },
-            .{ .image = &fontImage },
+            .{ .image = &font.image },
             .{ .buffer = &buffer },
         });
         const resourcesUpload = try upload.staging.alloc(rend.resourceHeap.updateSrcSlots.items.len, 1);
