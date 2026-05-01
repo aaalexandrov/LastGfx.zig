@@ -1,6 +1,6 @@
 #version 450
 
-#include "font.h"
+#include "font.glsli"
 
 layout (location = 0) in vec3 uvlayer;
 
