@@ -1060,6 +1060,13 @@ pub const Buffer = struct {
         size: u64 = 0,
         alignment: u64 = 16,
         usage: Usage = .{ .storageRead = true, .transferDst = true },
+
+        pub fn equal(lhs: *const @This(), rhs: *const @This()) bool {
+            return 
+                lhs.size == rhs.size and 
+                lhs.alignment == rhs.alignment and 
+                lhs.usage == rhs.usage;
+        }
     };
 
     pub const Self = @This();
@@ -1217,6 +1224,16 @@ pub const Image = struct {
         depth: i32 = 0,
         mips: i8 = 1,
         usage: Usage = Usage{.imageRead = true, .transferDst = true },
+
+        pub fn equal(lhs: *const @This(), rhs: *const @This()) bool {
+            return
+                lhs.format == rhs.format and
+                lhs.width == rhs.width and
+                lhs.height == rhs.height and
+                lhs.depth == rhs.depth and
+                lhs.mips == rhs.mips and
+                lhs.usage == rhs.usage;
+        }
 
         pub fn extent2D(self: *const @This()) c.VkExtent2D {
             return .{ .width = @intCast(self.width), .height = @intCast(@max(self.height, 1)) };

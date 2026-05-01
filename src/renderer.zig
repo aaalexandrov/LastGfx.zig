@@ -3,6 +3,23 @@ const c = @import("cimport.zig").c;
 const vk = @import("vk_gfx.zig");
 const zstbi = @import("zstbi");
 
+fn ListNode(List: type, T: type) type {
+    return struct {
+        data: T,
+        node: List.Node = .{},
+
+        pub const Self = @This();
+
+        pub fn getFromNode(n: *List.Node) *Self {
+            return @fieldParentPtr("node", n);
+        }
+
+        pub fn getFromData(d: *T) *Self {
+            return @fieldParentPtr("data", d);
+        }
+    };
+}
+
 pub const BufferArena = struct {
     buffer: vk.Buffer,
     offset: u64 = 0,
@@ -55,81 +72,136 @@ pub const BufferArena = struct {
 };
 
 pub const BufferPool = struct {
-    buffers: std.ArrayList(*BufferArena),
-    bufferDesc: vk.Buffer.Descriptor,
-    bufferIndex: u32 = 0,
+    buffers: std.DoublyLinkedList = .{},
     gfx: *vk.Gfx,
 
     pub const Self = @This();
+    pub const BufferNode = ListNode(std.DoublyLinkedList, BufferArena);
 
-    pub fn init(gfx: *vk.Gfx, bufferDesc: *const vk.Buffer.Descriptor) !Self {
+    pub fn init(gfx: *vk.Gfx) Self {
         return Self{
-            .buffers = try std.ArrayList(*BufferArena).initCapacity(gfx.alloc, 0),
-            .bufferDesc = bufferDesc.*,
             .gfx = gfx,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        for (self.buffers.items) |arena| {
-            arena.deinit();
-            self.gfx.alloc.destroy(arena);
+        while (self.buffers.popFirst()) |node| {
+            var bufNode = BufferNode.getFromNode(node);
+            bufNode.data.buffer.deinit();
+            self.gfx.alloc.destroy(bufNode);
         }
-        self.buffers.deinit(self.gfx.alloc);
+    }
+
+    pub fn get(self: *Self, bufDesc: *const vk.Buffer.Descriptor) !*BufferArena {
+        var node = self.buffers.first;
+        while (node) |n| {
+            const bufNode = BufferNode.getFromNode(n);
+            if (isDescriptorCompatible(&bufNode.data.buffer.desc, bufDesc)) {
+                self.buffers.remove(n);
+                return &bufNode.data;
+            }
+            node = n.next;
+        }
+        const newNode = try self.gfx.alloc.create(BufferNode);
+        newNode.* = .{
+            .data = try BufferArena.init(self.gfx, bufDesc),
+        };
+        return &newNode.data;
+    }
+
+    pub fn relinquish(self: *Self, newBuffer: *BufferArena) void {
+        const newNode = BufferNode.getFromData(newBuffer);
+        var node = self.buffers.first;
+        while (node) |n| {
+            const bufNode = BufferNode.getFromNode(n);
+            if (bufNode.data.buffer.desc.size > newBuffer.buffer.desc.size) {
+                self.buffers.insertBefore(n, &newNode.node);
+                break;
+            }
+            node = n.next;
+        } else {
+            self.buffers.append(&newNode.node);
+        }
+    }
+
+    fn isDescriptorCompatible(existing: *const vk.Buffer.Descriptor, requested: *const vk.Buffer.Descriptor) bool {
+        return 
+            existing.usage == requested.usage and 
+            existing.size >= requested.size and 
+            existing.alignment >= requested.alignment;
+    }
+};
+
+pub const BufferAllocator = struct {
+    buffers: std.DoublyLinkedList = .{},
+    bufferDesc: vk.Buffer.Descriptor,
+    currentBuffer: ?*BufferNode = null,
+    pool: *BufferPool,
+
+    pub const Self = @This();
+    pub const BufferNode = BufferPool.BufferNode;
+
+    pub fn init(pool: *BufferPool, bufferDesc: *const vk.Buffer.Descriptor) !Self {
+        return Self{
+            .bufferDesc = bufferDesc.*,
+            .pool = pool,
+        };
     }
 
     pub fn reset(self: *Self) void {
-        if (self.buffers.items.len > 0) {
-            for (self.buffers.items[0..self.bufferIndex + 1]) |buf|
-                buf.reset();
+        while (self.buffers.popFirst()) |n| {
+            const bufNode = BufferNode.getFromNode(n);
+            bufNode.data.reset();
+            if (bufNode.data.buffer.desc.equal(&self.bufferDesc)) {
+                self.pool.relinquish(&bufNode.data);
+            } else {
+                bufNode.data.deinit();
+                self.pool.gfx.alloc.destroy(bufNode);
+            }
         }
-        self.bufferIndex = 0;
+        self.currentBuffer = null;
     }
 
     pub fn alloc(self: *Self, size: u64, alignment: u64) !BufferArena.Alloc {
-        var bufAlloc = self.tryAllocExisting(size, alignment);
-        if (bufAlloc == null) {
-            const bufDesc = vk.Buffer.Descriptor{
-                .size = @max(size, self.bufferDesc.size),
-                .alignment = @max(alignment, self.bufferDesc.alignment),
-                .usage = self.bufferDesc.usage,
+        std.debug.assert((self.currentBuffer == null) == (self.buffers.first == null));
+        var node = self.buffers.first;
+        while (node) |n| {
+            const bufNode = BufferNode.getFromNode(n);
+            const bufAlloc = bufNode.data.alloc(size, alignment) catch |err| switch (err) {
+                error.BufferNotBigEnough => {
+                    node = n.next;
+                    if (bufNode == self.currentBuffer)
+                        break;
+                    continue;
+                }
             };
-            const bufArena = try self.gfx.alloc.create(BufferArena);
-            bufArena.* = try BufferArena.init(self.gfx, &bufDesc);
-            try self.buffers.append(self.gfx.alloc, bufArena);
-            self.bufferIndex = @intCast(self.buffers.items.len - 1);
-            bufAlloc = try self.buffers.items[self.bufferIndex].alloc(size, alignment);
-        }
-        return bufAlloc.?;
-    }
-
-    fn tryAllocExisting(self: *Self, size: u64, alignment: u64) ?BufferArena.Alloc {
-        for (0..self.buffers.items.len) |i| {
-            var idx = self.bufferIndex + i;
-            if (idx >= self.buffers.items.len)
-                idx -= self.buffers.items.len;
-            const bufAlloc = self.buffers.items[idx].alloc(size, alignment) catch |err| switch (err) {
-                error.BufferNotBigEnough => continue,
-            };
-            self.bufferIndex = @intCast(idx);
+            self.currentBuffer = bufNode;
             return bufAlloc;
         }
-        return null;
+        const bufDesc = vk.Buffer.Descriptor{
+            .size = @max(size, self.bufferDesc.size),
+            .alignment = @max(alignment, self.bufferDesc.alignment),
+            .usage = self.bufferDesc.usage,
+        };
+        const bufNode = BufferNode.getFromData(try self.pool.get(&bufDesc));
+        self.buffers.append(&bufNode.node);
+        self.currentBuffer = bufNode;
+        return bufNode.data.alloc(size, alignment) catch unreachable;
     }
 };
 
 pub const SubmitInfo = struct {
     cmds: vk.Commands,
     submitSemaphore: vk.Semaphore,
-    staging: BufferPool,
+    staging: BufferAllocator,
 
     const Self = @This();
-    pub fn init(gfx: *vk.Gfx, stagingSize: u64) !Self {
+    pub fn init(renderer: *Renderer, stagingSize: u64) !Self {
         return Self{
-            .cmds = try vk.Commands.init(gfx),
-            .submitSemaphore = try vk.Semaphore.init(gfx, null),
+            .cmds = try vk.Commands.init(&renderer.gfx),
+            .submitSemaphore = try vk.Semaphore.init(&renderer.gfx, null),
             .staging = 
-                try BufferPool.init(gfx, &.{ 
+                try BufferAllocator.init(&renderer.bufferPool, &.{ 
                     .size = stagingSize,
                     .usage = .{.hostWrite = true, .transferSrc = true},
                 }),
@@ -139,7 +211,7 @@ pub const SubmitInfo = struct {
         try self.cmds.waitFinished();
         self.cmds.deinit();
         self.submitSemaphore.deinit();
-        self.staging.deinit();
+        self.staging.reset();
     }
 
     pub fn loadTexture(self: *Self, filename: [:0]const u8, usage: vk.Usage) !vk.Image {
@@ -199,6 +271,7 @@ pub const Renderer = struct {
     gfx: vk.Gfx,
     resourceHeap: vk.DescriptorHeap,
     samplerHeap: vk.DescriptorHeap,
+    bufferPool: BufferPool,
 
     pub const Self = @This();
 
@@ -212,9 +285,11 @@ pub const Renderer = struct {
         try self.gfx.init(alloc, debug);
         self.resourceHeap = try vk.DescriptorHeap.init(&self.gfx, .Resource, numResourceDescriptors orelse self.gfx.physical.maxResourceDescriptors());
         self.samplerHeap = try vk.DescriptorHeap.init(&self.gfx, .Sampler, numSamplerDescriptors orelse self.gfx.physical.maxSamplerDescriptors());
+        self.bufferPool = BufferPool.init(&self.gfx);
     }
 
     pub fn deinit(self: *Self) void {
+        self.bufferPool.deinit();
         self.samplerHeap.deinit();
         self.resourceHeap.deinit();
         self.gfx.deinit();

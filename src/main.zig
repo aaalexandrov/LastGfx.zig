@@ -56,7 +56,7 @@ pub fn main() !void {
     @as(*InputBuffer, @ptrCast(@alignCast(buffer.hostAddress))).* = bufContent;
 
     {
-        var upload = try r.SubmitInfo.init(&rend.gfx, 1024 * 1024);
+        var upload = try r.SubmitInfo.init(&rend, 1024 * 1024);
         defer upload.deinit() catch {};
 
         try upload.cmds.begin();
@@ -198,7 +198,7 @@ pub fn main() !void {
                 try cmd.deinit();
             try commands.resize(rend.gfx.alloc, window.swapchain.images.len);
             for (commands.items) |*cmd|
-                cmd.* = try r.SubmitInfo.init(&rend.gfx, 64 * 1024);
+                cmd.* = try r.SubmitInfo.init(&rend, 64 * 1024);
 
             commandsIndex = 0;
         }
