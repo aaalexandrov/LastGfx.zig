@@ -22,15 +22,11 @@ pub fn ZipTreeWithKey(comptime DataType: type, comptime KeyType: type, comptime 
         pub const Key: type = KeyType;
         const Rank = u8;
 
-        fn compareData(a: Data, b: Data) std.math.Order {
+        fn compareKey(comptime K: type, a: K, b: Data) std.math.Order {
             return compareFn(a, b);
         }
 
-        fn compareKey(a: Key, b: Data) std.math.Order {
-            return compareFn(a, b);
-        }
-
-        const Node = struct {
+        pub const Node = struct {
             data: Data,
             rank: Rank = std.math.maxInt(Rank),
             child: [2]?*Node = .{ null, null },
@@ -53,7 +49,7 @@ pub fn ZipTreeWithKey(comptime DataType: type, comptime KeyType: type, comptime 
             fn lastEqualChild(self: *@This(), comptime childIndex: u1) *Node {
                 var node = self;
                 while (node.child[childIndex]) |child| {
-                    if (compareData(child.data, self.data) != .eq)
+                    if (compareKey(Data, child.data, self.data) != .eq)
                         break;
                     node = child;
                 }
@@ -131,7 +127,7 @@ pub fn ZipTreeWithKey(comptime DataType: type, comptime KeyType: type, comptime 
 
         fn insertNode(root: ?*Node, node: *Node) *Node {
             if (root) |r| {
-                const nodeROrder = compareData(node.data, r.data);
+                const nodeROrder = compareKey(Data, node.data, r.data);
                 if (nodeROrder == .lt or nodeROrder == .eq and node.rank > r.rank) {
                     if (insertNode(r.child[0], node) == node) {
                         if (node.rank < r.rank) {
@@ -160,18 +156,26 @@ pub fn ZipTreeWithKey(comptime DataType: type, comptime KeyType: type, comptime 
         }
 
         pub fn lowerBound(self: *Self, key: Key) ?*Node {
-            return self.getBound(key, 0);
+            return self.getBound(Key, key, 0);
         }
 
-        pub fn upperBound(self: *Self, key: Data) ?*Node {
-            return self.getBound(key, 1);
+        pub fn lowerBoundAny(self: *Self, comptime K: type, key: K) ?*Node {
+            return self.getBound(K, key, 0);
         }
 
-        fn getBound(self: *Self, key: Key, comptime childIndex: u1) ?*Node {
+        pub fn upperBound(self: *Self, key: Key) ?*Node {
+            return self.getBound(Key, key, 1);
+        }
+
+        pub fn upperBoundAny(self: *Self, comptime K: type, key: K) ?*Node {
+            return self.getBound(K, key, 1);
+        }
+
+        fn getBound(self: *Self, comptime K: type, key: K, comptime childIndex: u1) ?*Node {
             var prevParent: ?*Node = null;
             var curNode = self.root;
             while (curNode) |cur| {
-                const dataCurOrder = compareKey(key, cur.data);
+                const dataCurOrder = compareKey(K, key, cur.data);
                 if (dataCurOrder == .eq)
                     return cur.lastEqualChild(0);
                 if (dataCurOrder == .lt) {
@@ -190,9 +194,13 @@ pub fn ZipTreeWithKey(comptime DataType: type, comptime KeyType: type, comptime 
         }
 
         pub fn find(self: *Self, key: Key) ?*Node {
+            return findAny(self, Key, key);
+        }
+
+        pub fn findAny(self: *Self, comptime K: type, key: K) ?*Node {
             var curNode = self.root;
             while (curNode) |cur| {
-                const dataCurOrder = compareKey(key, cur.data);
+                const dataCurOrder = compareKey(K, key, cur.data);
                 if (dataCurOrder == .eq)
                     return cur.lastEqualChild(0);
                 curNode = if (dataCurOrder == .lt) cur.child[0] else cur.child[1];
@@ -209,7 +217,11 @@ pub fn ZipTreeWithKey(comptime DataType: type, comptime KeyType: type, comptime 
         }
 
         pub fn erase(self: *Self, key: Key) bool {
-            const node = self.find(key);
+            return self.eraseAny(Key, key);
+        }
+
+        pub fn eraseAny(self: *Self, comptime K: type, key: Key) bool {
+            const node = self.findAny(K, key);
             if (node) |n| {
                 self.delete(n);
                 return true;
@@ -240,7 +252,7 @@ pub fn ZipTreeWithKey(comptime DataType: type, comptime KeyType: type, comptime 
         fn deleteNode(node: *Node, root: *Node) ?*Node {
             if (node == root)
                 return zipNodes(root.child[0], root.child[1]);
-            if (compareData(node.data, root.data) == .lt) {
+            if (compareKey(Data, node.data, root.data) == .lt) {
                 if (node == root.child[0]) {
                     root.setChild(0, zipNodes(root.child[0].?.child[0], root.child[0].?.child[1]));
                 } else {
@@ -266,14 +278,14 @@ pub fn ZipTreeWithKey(comptime DataType: type, comptime KeyType: type, comptime 
             if (n.child[0]) |l| {
                 const sameChildren = n.child[0] == n.child[1];
                 const badParent = l.parent != n;
-                if (sameChildren or badParent or compareData(l.data, n.data).compare(.gte) or l.rank >= n.rank or !validateNode(l)) {
+                if (sameChildren or badParent or compareKey(Data, l.data, n.data).compare(.gte) or l.rank >= n.rank or !validateNode(l)) {
                     std.log.info("failed left, n.data = {}, n.rank = {}, l.data = {}, l.rank = {}, bad parent = {}, same children = {}", .{ n.data, n.rank, l.data, l.rank, badParent, sameChildren });
                     return false;
                 }
             }
             if (n.child[1]) |r| {
                 const badParent = r.parent != n;
-                if (badParent or compareData(r.data, n.data) == .lt or r.rank > n.rank or !validateNode(r)) {
+                if (badParent or compareKey(Data, r.data, n.data) == .lt or r.rank > n.rank or !validateNode(r)) {
                     std.log.info("failed right, n.data = {}, n.rank = {}, r.data = {}, r.rank = {}, bad parent = {}", .{ n.data, n.rank, r.data, r.rank, badParent });
                     return false;
                 }
@@ -306,10 +318,10 @@ pub fn ZipTreeKV(comptime KeyType: type, comptime ValueType: type, comptime comp
         pub const Value: type = ValueType;
         const Self = @This();
         pub fn compareFn(keyOrKeyValue: anytype, keyValue: Self) std.math.Order {
-            if (@TypeOf(keyOrKeyValue) == Self)
-                return compareKeysFn(keyOrKeyValue.key, keyValue.key);
-            if (@TypeOf(keyOrKeyValue) == Key)
-                return compareKeysFn(keyOrKeyValue, keyValue.key);
+            return switch (@TypeOf(keyOrKeyValue)) {
+                Self => compareKeysFn(keyOrKeyValue.key, keyValue.key),
+                else => compareKeysFn(keyOrKeyValue, keyValue.key),
+            };
         }
     };
 

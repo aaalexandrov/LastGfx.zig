@@ -3,15 +3,12 @@ const c = @import("cimport.zig").c;
 const vk = @import("vk_gfx.zig");
 const r = @import("renderer.zig");
 const Font = @import("fixed_font.zig");
-const Range = @import("range_allocator.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer if (gpa.deinit() == .leak) {
         @panic("Leaked memory detected on exit!");
     };
-
-    try Range.RangeAllocTest(gpa.allocator());
 
     const activateDebugLayers = @import("builtin").mode == .Debug or @import("builtin").mode == .ReleaseSafe;
     var rend : r.Renderer = undefined;
