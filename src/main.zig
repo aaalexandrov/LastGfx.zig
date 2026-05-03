@@ -3,12 +3,15 @@ const c = @import("cimport.zig").c;
 const vk = @import("vk_gfx.zig");
 const r = @import("renderer.zig");
 const Font = @import("fixed_font.zig");
+const descr = @import("descriptors.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer if (gpa.deinit() == .leak) {
         @panic("Leaked memory detected on exit!");
     };
+
+    //try @import("range_allocator.zig").RangeAllocTest(gpa.allocator());
 
     const activateDebugLayers = @import("builtin").mode == .Debug or @import("builtin").mode == .ReleaseSafe;
     var rend : r.Renderer = undefined;
@@ -40,9 +43,11 @@ pub fn main() !void {
 
     const linearSamplerDescriptorIndex: u32 = 0;
 
-    const imageDescriptorIndex = 0 * rend.resourceHeap.imageDescriptorsPerSlot;
-    //const fontImageDescriptorIndex = 1 * resourceHeap.imageDescriptorsPerSlot;
-    const bufferDescriptorIndex: u32 = 2 * rend.resourceHeap.bufferDescriptorsPerSlot;
+    const imageDescSize = rend.resourceHeap.getDescriptorSize(vk.Image);
+    const bufferDescSize = rend.resourceHeap.getDescriptorSize(vk.Buffer);
+    const imageDescriptorIndex = 0 * rend.resourceHeap.maxDescriptorSize / imageDescSize;
+    const fontImageDescriptorIndex = 1 * rend.resourceHeap.maxDescriptorSize / imageDescSize;
+    const bufferDescriptorIndex = 2 * rend.resourceHeap.maxDescriptorSize / bufferDescSize;
 
     const InputBuffer = extern struct {
         color: [4]f32,
@@ -67,17 +72,41 @@ pub fn main() !void {
 
         font = try Font.initFromFile("data/font_rgba_10x20.png", &upload);
 
-        try rend.samplerHeap.writeSamplerDescriptors(linearSamplerDescriptorIndex, &[_]c.VkSamplerCreateInfo{vk.Sampler.createInfo(&.{})});
-        const samplerUpload = try upload.staging.alloc(rend.samplerHeap.updateSrcSlots.items.len, 1);
-        try upload.cmds.updateDescriptorHeap(&rend.samplerHeap, samplerUpload.buffer, samplerUpload.offset);
-
-        try rend.resourceHeap.writeResourceDescriptors(imageDescriptorIndex, &[_]vk.ResourcePtr{
-            .{ .image = &image },
-            .{ .image = &font.image },
-            .{ .buffer = &buffer },
+        const samplerUpload = try upload.staging.alloc(rend.samplerHeap.maxDescriptorSize * 1, 1);
+        try rend.samplerHeap.writeSamplerDescriptor(&vk.Sampler.createInfo(&.{}), (samplerUpload.buffer.hostAddress.? + samplerUpload.offset)[0 .. rend.samplerHeap.maxDescriptorSize]);
+        upload.cmds.copyBuffer(samplerUpload.buffer, &rend.samplerHeap.deviceBuffer, &[_]c.VkBufferCopy2{
+            .{
+                .sType = c.VK_STRUCTURE_TYPE_BUFFER_COPY_2,
+                .srcOffset = samplerUpload.offset,
+                .size = samplerUpload.size,
+            },
         });
-        const resourcesUpload = try upload.staging.alloc(rend.resourceHeap.updateSrcSlots.items.len, 1);
-        try upload.cmds.updateDescriptorHeap(&rend.resourceHeap, resourcesUpload.buffer, resourcesUpload.offset);
+
+        // var samplerWriter = try descr.DescriptorHeapWriter.init(&rend.samplerHeap);
+        // defer samplerWriter.deinit();
+        // try samplerWriter.setSampler(linearSamplerDescriptorIndex, &vk.Sampler.createInfo(&.{}));
+        // const samplerUpload = try upload.staging.alloc(samplerWriter.updatesSize, 1);
+        // try samplerWriter.uploadSetDescriptors(&upload.cmds, samplerUpload.buffer, samplerUpload.offset);
+
+        const resourceUpload = try upload.staging.alloc(rend.resourceHeap.maxDescriptorSize * 3, 1);
+        try rend.resourceHeap.writeImageDescriptor(&image, (resourceUpload.buffer.hostAddress.? + resourceUpload.offset + imageDescriptorIndex*imageDescSize)[0 .. imageDescSize]);
+        try rend.resourceHeap.writeImageDescriptor(&font.image, (resourceUpload.buffer.hostAddress.? + resourceUpload.offset + fontImageDescriptorIndex*imageDescSize)[0 .. imageDescSize]);
+        try rend.resourceHeap.writeBufferDescriptor(&buffer, 0, 0, (resourceUpload.buffer.hostAddress.? + resourceUpload.offset + bufferDescriptorIndex*bufferDescSize)[0 .. bufferDescSize]);        
+        upload.cmds.copyBuffer(resourceUpload.buffer, &rend.resourceHeap.deviceBuffer, &[_]c.VkBufferCopy2{
+            .{
+                .sType = c.VK_STRUCTURE_TYPE_BUFFER_COPY_2,
+                .srcOffset = resourceUpload.offset,
+                .size = resourceUpload.size,
+            },
+        });
+
+        // var resourceWriter = try descr.DescriptorHeapWriter.init(&rend.resourceHeap);
+        // defer resourceWriter.deinit();
+        // try resourceWriter.setImage(imageDescriptorIndex, &image);
+        // try resourceWriter.setImage(fontImageDescriptorIndex, &font.image);
+        // try resourceWriter.setBuffer(bufferDescriptorIndex, &buffer, 0, 0);
+        // const resourceUpload = try upload.staging.alloc(resourceWriter.updatesSize, 1);
+        // try resourceWriter.uploadSetDescriptors(&upload.cmds, resourceUpload.buffer, resourceUpload.offset);
 
         upload.cmds.imageBarrier(&image, .{}, .Graphics, .{.transferDst = true}, .Graphics);
 

@@ -53,8 +53,9 @@ pub const RangeAlloc = struct {
             };
         }
     };
-    pub const FreeRanges = zip.ZipTree(Range, Range.orderBySize);
-    pub const AllocatedRanges = zip.ZipTree(Range, Range.orderByStart);
+
+    const FreeRanges = zip.ZipTree(Range, Range.orderBySize);
+    const AllocatedRanges = zip.ZipTree(Range, Range.orderByStart);
 
     pub const Self = @This();
 
@@ -199,7 +200,8 @@ pub fn RangeAllocTest(alloc: std.mem.Allocator) !void {
     const a1000 = try ra.alloc(1000, 1);
     try std.testing.expect(ra.validate());
 
-    try std.testing.expectEqual(1000, ra.allocSize(a1000));
+    try std.testing.expectEqual(1000, ra.allocSize(a1000 + 5));
+    try std.testing.expectEqual(0, ra.allocSize(a1000 + 1005));
 
     const a2048 = try ra.alloc(2048, 16);
     try std.testing.expect(ra.validate());

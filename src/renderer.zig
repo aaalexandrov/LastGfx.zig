@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @import("cimport.zig").c;
 const vk = @import("vk_gfx.zig");
 const zstbi = @import("zstbi");
+const descr = @import("descriptors.zig");
 
 fn ListNode(List: type, T: type) type {
     return struct {

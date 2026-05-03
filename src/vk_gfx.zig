@@ -455,34 +455,6 @@ pub const Commands = struct {
         }
     }
 
-    pub fn updateDescriptorHeap(self: *Self, descHeap: *DescriptorHeap, stagingBuffer: *Buffer, offsetInBuffer: u64) !void {
-        std.debug.assert(stagingBuffer.desc.usage.hostWrite and stagingBuffer.desc.usage.transferSrc);
-        std.debug.assert(offsetInBuffer + descHeap.updateSrcSlots.items.len <= stagingBuffer.desc.size);
-
-        @memcpy(stagingBuffer.hostAddress.?[offsetInBuffer..offsetInBuffer + descHeap.updateSrcSlots.items.len], descHeap.updateSrcSlots.items);
-
-        const copy2 = try self.gfx.alloc.alloc(c.VkBufferCopy2, descHeap.updateDstToSrcSlot.count());
-        defer self.gfx.alloc.free(copy2);
-
-        // TODO: sort the copies - by source or destination slot? then coallesce consequtive copies into a single entry?
-        var count: usize = 0;
-        var iter = descHeap.updateDstToSrcSlot.iterator();
-        while (iter.next()) |entry| : (count += 1) {
-            const dstSlot = entry.key_ptr.*;
-            const srcSlot = entry.value_ptr.*;
-            copy2[count] = .{
-                .sType = c.VK_STRUCTURE_TYPE_BUFFER_COPY_2,
-                .srcOffset = srcSlot * descHeap.maxDescriptorSize + offsetInBuffer,
-                .dstOffset = dstSlot * descHeap.maxDescriptorSize,
-                .size = descHeap.maxDescriptorSize,
-            };
-        }
-
-        descHeap.clearStoredUpdates();
-
-        self.copyBuffer(stagingBuffer, &descHeap.deviceBuffer, copy2);
-    }
-
     pub fn renderBegin(self: *Self, colorTargets: []const RenderTarget, depthStencilTarget: ?RenderTarget) !void {
         var colorAttachments = try std.ArrayList(c.VkRenderingAttachmentInfo).initCapacity(self.gfx.alloc, colorTargets.len);
         defer colorAttachments.deinit(self.gfx.alloc);
@@ -1116,16 +1088,18 @@ pub const Buffer = struct {
         c.vmaDestroyBuffer(self.gfx.vma, self.handle, self.allocation);
     }
 
-    pub fn getDeviceAddressRange(self: *const Self) c.VkDeviceAddressRangeEXT {
-        return .{
-            .address = self.deviceAddress,
-            .size = self.desc.size,
+    pub fn getDeviceAddressRange(self: *const Self, offset: u64, size: u64) c.VkDeviceAddressRangeEXT {
+        const addrRange = c.VkDeviceAddressRangeEXT{
+            .address = self.deviceAddress + offset,
+            .size = if (size == 0) self.desc.size else size,
         };
+        std.debug.assert(offset + addrRange.size <= self.desc.size);
+        return addrRange;
     }
 
-    fn writeDescriptorData(self: *const Self, descInfo: *c.VkResourceDescriptorInfoEXT, alloc: std.mem.Allocator) !void {
+    pub fn writeDescriptorData(self: *const Self, descInfo: *c.VkResourceDescriptorInfoEXT, alloc: std.mem.Allocator, offset: u64, size: u64) !void {
         const addressRange = try alloc.create(c.VkDeviceAddressRangeEXT);
-        addressRange.* = self.getDeviceAddressRange();
+        addressRange.* = self.getDeviceAddressRange(offset, size);
         descInfo.* = .{
             .sType = c.VK_STRUCTURE_TYPE_RESOURCE_DESCRIPTOR_INFO_EXT,
             .type = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1331,7 +1305,7 @@ pub const Image = struct {
         };
     }
 
-    fn writeDescriptorData(self: *const Self, descInfo: *c.VkResourceDescriptorInfoEXT, alloc: std.mem.Allocator) !void {
+    pub fn writeDescriptorData(self: *const Self, descInfo: *c.VkResourceDescriptorInfoEXT, alloc: std.mem.Allocator) !void {
         const viewInfo = try alloc.create(c.VkImageViewCreateInfo);
         viewInfo.* = self.viewCreateInfo();
         const imageDescInfo = try alloc.create(c.VkImageDescriptorInfoEXT);
@@ -1536,21 +1510,11 @@ pub const Sampler = struct {
     }
 };
 
-pub const ResourcePtr = union(enum) {
-    none: void,
-    buffer: *Buffer,
-    image: *Image,
-};
-
 pub const DescriptorHeap = struct {
     deviceBuffer: Buffer,
     kind: Kind,
-    maxDescriptorSize: u64,
+    maxDescriptorSize: u32,
     reservedSize: u64,
-    bufferDescriptorsPerSlot: u32,
-    imageDescriptorsPerSlot: u32,
-    updateSrcSlots: ByteArrayList,
-    updateDstToSrcSlot: U64HashMap,
 
     pub const Kind = enum {
         Sampler,
@@ -1599,84 +1563,70 @@ pub const DescriptorHeap = struct {
                 .usage = usage,
             }),
             .kind = kind,
-            .maxDescriptorSize = maxDescriptorSize,
+            .maxDescriptorSize = @intCast(maxDescriptorSize),
             .reservedSize = reservedSize,
-            .bufferDescriptorsPerSlot = if (kind == .Resource) @intCast(maxDescriptorSize / gfx.physical.descriptorHeapProps.bufferDescriptorSize) else 0,
-            .imageDescriptorsPerSlot = if (kind == .Resource) @intCast(maxDescriptorSize / gfx.physical.descriptorHeapProps.imageDescriptorSize) else 0,
-            .updateSrcSlots = try ByteArrayList.initCapacity(gfx.alloc, 16 * maxDescriptorSize),
-            .updateDstToSrcSlot = try U64HashMap.init(gfx.alloc, &[_]u64{}, &[_]u64{}),
         };
 
         return self;
     }
 
     pub fn deinit(self: *Self) void {
-        self.updateDstToSrcSlot.deinit(self.deviceBuffer.gfx.alloc);
-        self.updateSrcSlots.deinit(self.deviceBuffer.gfx.alloc);
         self.deviceBuffer.deinit();
     }
 
-    pub fn getNumSlots(self: *const Self) u64 {
+    pub fn getMaxDescriptors(self: *const Self) u64 {
         return (self.deviceBuffer.desc.size - self.reservedSize) / self.maxDescriptorSize;
     }
 
-    fn getUpdateHostAddressRange(self: *Self, dstSlot: u64) !c.VkHostAddressRangeEXT {
-        std.debug.assert(dstSlot < self.getNumSlots());
-        const srcSlot = self.updateDstToSrcSlot.get(dstSlot) orelse newSlot: {
-            const lastSlot = self.updateSrcSlots.items.len / self.maxDescriptorSize;
-            try self.updateSrcSlots.resize(self.deviceBuffer.gfx.alloc, self.updateSrcSlots.items.len + self.maxDescriptorSize);
-            try self.updateDstToSrcSlot.put(self.deviceBuffer.gfx.alloc, dstSlot, lastSlot);
-            break :newSlot lastSlot;
-        };
-        return .{
-            .address = &self.updateSrcSlots.items[srcSlot * self.maxDescriptorSize],
-            .size = self.maxDescriptorSize,
-        };
+    pub fn getDescriptorSize(self: *Self, comptime resourceType: type) u32 {
+        const heapProps = &self.deviceBuffer.gfx.physical.descriptorHeapProps;
+        return @intCast(switch (resourceType) {
+            Sampler => heapProps.samplerDescriptorSize,
+            Buffer => heapProps.bufferDescriptorSize,
+            Image => heapProps.imageDescriptorSize,
+            else => unreachable,
+        });
     }
 
-    pub fn writeSamplerDescriptors(self: *Self, startIndex: u64, samplerInfos: []const c.VkSamplerCreateInfo) !void {
-        std.debug.assert(self.kind == .Sampler);
-
+    pub fn writeSamplerDescriptor(self: *Self, samplerInfo: *const c.VkSamplerCreateInfo, dst: []u8) !void {
         const gfx = self.deviceBuffer.gfx;
-
-        var hostAddresses = try gfx.alloc.alloc(c.VkHostAddressRangeEXT, samplerInfos.len);
-        defer gfx.alloc.free(hostAddresses);
-        for (0..samplerInfos.len) |i| 
-            hostAddresses[i] = try self.getUpdateHostAddressRange(startIndex + i);
-
-        try check(gfx.writeSamplerDescriptorsEXT.?(gfx.device.handle, @intCast(samplerInfos.len), samplerInfos.ptr, hostAddresses.ptr));
+        const descSize = gfx.physical.descriptorHeapProps.samplerDescriptorSize;
+        std.debug.assert(dst.len == descSize);
+        const hostAddress = c.VkHostAddressRangeEXT{
+            .address = dst.ptr,
+            .size = descSize,
+        };
+        try check(gfx.writeSamplerDescriptorsEXT.?(gfx.device.handle, 1, samplerInfo, &hostAddress));
     }
 
-    pub fn writeResourceDescriptors(self: *Self, startSlot: u64, resources: []const ResourcePtr) !void {
-        std.debug.assert(self.kind == .Resource);
-        
+    pub fn writeBufferDescriptor(self: *Self, buffer: *Buffer, offset: u64, size: u64, dst: []u8) !void {
         const gfx = self.deviceBuffer.gfx;
-
-        var hostAddresses = try gfx.alloc.alloc(c.VkHostAddressRangeEXT, resources.len);
-        defer gfx.alloc.free(hostAddresses);
-
-        var arena = std.heap.ArenaAllocator.init(gfx.alloc);
-        defer arena.deinit();
-        const arenaAlloc = arena.allocator();
-
-        var resourceDescInfos = try arenaAlloc.alloc(c.VkResourceDescriptorInfoEXT, resources.len);
-
-        for (0..resources.len) |i| {
-            hostAddresses[i] = try self.getUpdateHostAddressRange(startSlot + i);
-            switch (resources[i]) {
-                .none => unreachable,
-                inline else => |res| {
-                    try res.writeDescriptorData(&resourceDescInfos[i], arenaAlloc);
-                },
-            }
-        }
-
-        try check(gfx.writeResourceDescriptorsEXT.?(gfx.device.handle, @intCast(resources.len), resourceDescInfos.ptr, hostAddresses.ptr));
+        const descSize = gfx.physical.descriptorHeapProps.bufferDescriptorSize;
+        std.debug.assert(dst.len == descSize);
+        const hostAddress = c.VkHostAddressRangeEXT{
+            .address = dst.ptr,
+            .size = descSize,
+        };
+        var descInfo: c.VkResourceDescriptorInfoEXT = undefined;
+        var mem: [256]u8 = undefined;
+        var memArena = std.heap.FixedBufferAllocator.init(mem[0..]);
+        try buffer.writeDescriptorData(&descInfo, memArena.allocator(), offset, size);
+        try check(gfx.writeResourceDescriptorsEXT.?(gfx.device.handle, 1, &descInfo, &hostAddress));
     }
 
-    fn clearStoredUpdates(self: *Self) void {
-        self.updateSrcSlots.clearRetainingCapacity();
-        self.updateDstToSrcSlot.clearRetainingCapacity();
+    pub fn writeImageDescriptor(self: *Self, image: *Image, dst: []u8) !void {
+        const gfx = self.deviceBuffer.gfx;
+        const descSize = gfx.physical.descriptorHeapProps.imageDescriptorSize;
+        std.debug.assert(dst.len == descSize);
+        const hostAddress = c.VkHostAddressRangeEXT{
+            .address = dst.ptr,
+            .size = descSize,
+        };
+        var descInfo: c.VkResourceDescriptorInfoEXT = undefined;
+        var mem: [512]u8 = undefined;
+        var memArena = std.heap.FixedBufferAllocator.init(mem[0..]);
+        try image.writeDescriptorData(&descInfo, memArena.allocator());
+        try check(gfx.writeResourceDescriptorsEXT.?(gfx.device.handle, 1, &descInfo, &hostAddress));
     }
 };
 
