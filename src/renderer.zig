@@ -33,6 +33,16 @@ pub const BufferArena = struct {
         pub fn slice(self: @This()) []u8 {
             return self.buffer.hostAddress.?[self.offset..self.offset + self.size];
         }
+
+        pub fn descriptorData(self: @This()) vk.DescriptorData {
+            return .{
+                .buffer = .{
+                    .obj = self.buffer,
+                    .offset = self.offset,
+                    .size = self.size,
+                },
+            };
+        }
     };
     pub const Self = @This();
 
@@ -192,6 +202,7 @@ pub const BufferAllocator = struct {
 };
 
 pub const SubmitInfo = struct {
+    preCmds: vk.Commands,
     cmds: vk.Commands,
     submitSemaphore: vk.Semaphore,
     staging: BufferAllocator,
@@ -202,12 +213,13 @@ pub const SubmitInfo = struct {
     pub const Self = @This();
     pub fn init(renderer: *Renderer, stagingSize: u64) !Self {
         return Self{
+            .preCmds = try vk.Commands.init(&renderer.gfx),
             .cmds = try vk.Commands.init(&renderer.gfx),
             .submitSemaphore = try vk.Semaphore.init(&renderer.gfx, null),
             .staging = 
                 try BufferAllocator.init(&renderer.bufferPool, &.{ 
                     .size = stagingSize,
-                    .usage = .{.hostWrite = true, .transferSrc = true},
+                    .usage = .{.hostWrite = true, .storageRead = true, .transferSrc = true},
                 }),
             .transientDescriptors = try DescriptorArray.initCapacity(renderer.gfx.alloc, 0),
             .renderer = renderer,
@@ -215,15 +227,27 @@ pub const SubmitInfo = struct {
     }
     pub fn deinit(self: *Self) !void {
         try self.cmds.waitFinished();
+        try self.reset();
+        self.transientDescriptors.deinit(self.renderer.gfx.alloc);
+        self.preCmds.deinit();
         self.cmds.deinit();
         self.submitSemaphore.deinit();
-        try self.reset();
     }
 
     pub fn reset(self: *Self) !void {
         self.staging.reset();
         for (self.transientDescriptors.items) |desc|
             try self.renderer.freeDescriptor(desc);
+        self.transientDescriptors.clearRetainingCapacity();
+    }
+
+    pub fn submit(self: *Self, waitSemaphore: ?*vk.Semaphore) !void {
+        try self.preCmds.begin();
+        try self.uploadDescriptors(&self.preCmds);
+        try self.preCmds.end();
+
+        try self.preCmds.submit(waitSemaphore);
+        try self.cmds.submit(null);
     }
 
     pub fn loadTexture(self: *Self, filename: [:0]const u8, usage: vk.Usage) !vk.Image {
@@ -259,17 +283,17 @@ pub const SubmitInfo = struct {
         return image;
     }
 
-    pub fn uploadHeapDescriptors(self: *Self, descHeap: *DescriptorHeapManaged) !void {
+    pub fn uploadHeapDescriptors(self: *Self, descHeap: *DescriptorHeapManaged, cmds: *vk.Commands) !void {
         if (descHeap.writer.updatesSize == 0)
             return;
         const upload = try self.staging.alloc(descHeap.writer.updatesSize, 1);
-        try descHeap.writer.uploadSetDescriptors(&self.cmds, upload.buffer, upload.offset);
+        try descHeap.writer.uploadSetDescriptors(cmds, upload.buffer, upload.offset);
         descHeap.writer.clear(false);
     }
 
-    pub fn uploadDescriptors(self: *Self) !void {
-        try self.uploadHeapDescriptors(&self.renderer.samplers);
-        try self.uploadHeapDescriptors(&self.renderer.resources);
+    pub fn uploadDescriptors(self: *Self, cmds: *vk.Commands) !void {
+        try self.uploadHeapDescriptors(&self.renderer.samplers, cmds);
+        try self.uploadHeapDescriptors(&self.renderer.resources, cmds);
     }
 
     pub fn bindDescriptorHeaps(self: *Self) void {
@@ -277,7 +301,7 @@ pub const SubmitInfo = struct {
         self.cmds.bindDescriptorHeap(&self.renderer.resources.heap);
     }
 
-    pub fn setTransientDescriptor(self: *Self, descData: *const vk.DescriptorData) !void {
+    pub fn setTransientDescriptor(self: *Self, descData: *const vk.DescriptorData) !vk.HeapDescriptor {
         const desc = try self.renderer.setDescriptor(descData);
         try self.transientDescriptors.append(self.renderer.gfx.alloc, desc);
         return desc;

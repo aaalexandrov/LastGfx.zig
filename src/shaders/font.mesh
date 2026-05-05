@@ -6,31 +6,38 @@
 layout (location = 0) out vec3 uvlayer[];
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
-layout(triangles, max_vertices = 4, max_primitives = 2) out;
+layout(triangles, max_vertices = 128, max_primitives = 64) out;
 
 void main()
 {
     uint charIndex = gl_GlobalInvocationID.x;
     uint numCharacters = heapInputData[pushData.inputDataBufferIndex].data.numCharacters;
 
-    if (charIndex >= numCharacters) {
-        SetMeshOutputsEXT(0, 0);
+    if (charIndex >= numCharacters)
         return;
+
+    if (gl_LocalInvocationID.x == 0) {
+        uint vertexCount = 4 * numCharacters;
+        uint triangleCount = 2 * numCharacters;
+        SetMeshOutputsEXT(vertexCount, triangleCount);  
     }
 
-    uint vertexCount = 4;
-    uint triangleCount = 2;
-    SetMeshOutputsEXT(vertexCount, triangleCount);  
-
-    CharData ch = heapInputData[pushData.inputDataBufferIndex].data.characters[charIndex];
     vec2 quadSize = heapInputData[pushData.inputDataBufferIndex].data.quadSize;
+
+    CharData ch;
+    // The offset of 3 below is due to the NVidia driver indexing incorrectly. This should be removed when this bug gets fixed.
+    ch.coordinates = heapInputData[pushData.inputDataBufferIndex].data.characters[charIndex + 3].coordinates;
+    ch.layer = heapInputData[pushData.inputDataBufferIndex].data.characters[charIndex + 3].layer;
+
+    uint baseVertex = 4 * charIndex;
 
     for (uint i = 0; i < 4; ++i) {
         vec2 uv = vec2(i % 2, i / 2);
-        gl_MeshVerticesEXT[i].gl_Position = vec4(ch.coordinates + uv * quadSize, 0, 1);
-        uvlayer[0] = vec3(uv, ch.layer);
+        gl_MeshVerticesEXT[i + baseVertex].gl_Position = vec4((ch.coordinates + uv * quadSize) * 2 - 1, 0, 1);
+        uvlayer[i + baseVertex] = vec3(uv, ch.layer);
     }
 
-    gl_PrimitiveTriangleIndicesEXT[0] =  uvec3(0, 1, 2);
-    gl_PrimitiveTriangleIndicesEXT[1] =  uvec3(2, 1, 3);
+    uint basePrim = 2 * charIndex;
+    gl_PrimitiveTriangleIndicesEXT[0 + basePrim] =  uvec3(baseVertex + 0, baseVertex + 1, baseVertex + 2);
+    gl_PrimitiveTriangleIndicesEXT[1 + basePrim] =  uvec3(baseVertex + 2, baseVertex + 1, baseVertex + 3);
 }

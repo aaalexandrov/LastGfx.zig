@@ -5,20 +5,22 @@ const zstbi = @import("zstbi");
 const r = @import("renderer.zig");
 
 image: vk.Image,
-name: []u8,
+imageDescriptor: vk.HeapDescriptor,
+samplerDescriptor: vk.HeapDescriptor,
+name: []const u8,
 
 pub var pipeline: vk.Pipeline = undefined;
 
 pub const Self = @This();
 
-pub fn init(fontName: []const u8, fontImage: vk.Image) !Self {
-    return Self{
-        .image = fontImage,
-        .name = try fontImage.gfx.alloc.dupe(u8, fontName),
-    };
+pub fn init(self: *Self, renderer: *r.Renderer, fontName: []const u8, fontImage: vk.Image, samplerDesc: vk.HeapDescriptor) !void {
+    self.image = fontImage;
+    self.imageDescriptor = try renderer.resources.setDescriptor(&.{.image = .{.obj = &self.image}});
+    self.samplerDescriptor = samplerDesc;
+    self.name = try self.image.gfx.alloc.dupe(u8, fontName);
 }
 
-pub fn initFromFile(imagePath: [:0]const u8, submit: *r.SubmitInfo) !Self {
+pub fn initFromFile(self: *Self, imagePath: [:0]const u8, samplerDesc: vk.HeapDescriptor, submit: *r.SubmitInfo) !void {
     const glyphSize = try glyphSizeFromPath(imagePath);
     var loaded = try zstbi.Image.loadFromFile(imagePath, 4);
     defer loaded.deinit();
@@ -65,11 +67,12 @@ pub fn initFromFile(imagePath: [:0]const u8, submit: *r.SubmitInfo) !Self {
         },
     });
 
-    return try init(imagePath, image);
+    return try init(self, submit.renderer, imagePath, image, samplerDesc);
 }
 
-pub fn deinit(self: *Self) void {
+pub fn deinit(self: *Self, renderer: *r.Renderer) !void {
     self.image.gfx.alloc.free(self.name);
+    try renderer.resources.freeDescriptor(self.imageDescriptor);
     self.image.deinit();
 }
 
@@ -81,9 +84,61 @@ pub fn deinitStatic(renderer: *r.Renderer) void {
     pipeline.deinit(&renderer.gfx);
 }
 
-// pub fn render(str: []const u8, startPos: [2]u32, pixelSize: [2]f32, color: [4]f32, submit: *r.SubmitInfo) !void {
+fn getCharLayer(self: *Self, ch: u8) u32 {
+    const lastChar: u32 = @intCast(-self.image.desc.depth - 1);
+    if (ch < ' ')
+        return lastChar;
+    return @min(ch - ' ', lastChar);
+}
 
-// }
+pub fn render(self: *Self, str: []const u8, startPos: [2]f32, pixelSize: [2]f32, color: [4]f32, submit: *r.SubmitInfo) !void {
+
+    const BufferData = extern struct {
+        inColor: [4]f32,
+        texIndex: u32,
+        samplerIndex: u32,
+        quadSize: [2]f32,
+        numCharacters: u32,
+        characters: [4 * 1024]CharData,
+
+        const CharData = extern struct {
+            coordinates: [2]f32,
+            layer: u32,
+        };
+    };
+
+    const quadSize: [2]f32 = .{
+        @as(f32, @floatFromInt(self.image.desc.width)) * pixelSize[0],
+        @as(f32, @floatFromInt(self.image.desc.height)) * pixelSize[1],
+    };
+
+    const buffer = try submit.staging.alloc(@sizeOf(BufferData) + @sizeOf(BufferData.CharData) * str.len - @sizeOf(BufferData.CharData) * (4 * 1024), 16);
+    const bufferData: *BufferData = @ptrCast(@alignCast(buffer.slice().ptr));
+    bufferData.inColor = color;
+    bufferData.texIndex = self.imageDescriptor.index;
+    bufferData.samplerIndex = self.samplerDescriptor.index;
+    bufferData.quadSize = quadSize;
+    bufferData.numCharacters = @intCast(str.len);
+
+    var pos: [2]f32 = .{
+        startPos[0] * pixelSize[0],
+        startPos[1] * pixelSize[1],
+    };
+    for (str, 0..) |ch, i| {
+        bufferData.characters[i] = .{
+            .coordinates = pos,
+            .layer = self.getCharLayer(ch),
+        };
+        pos[0] += quadSize[0];
+    }
+    
+    const bufferDesc = try submit.setTransientDescriptor(&buffer.descriptorData());
+
+    submit.cmds.bindRenderPipeline(&Self.pipeline);
+
+    submit.cmds.pushData(&bufferDesc.index);
+    submit.cmds.drawMeshTasks(@intCast((str.len + 31) / 32), 1, 1);
+}
 
 fn glyphSizeFromPath(imagePath: [:0]const u8) ![2]u32 {
     var nameSplit = std.mem.splitScalar(u8, imagePath, '.');

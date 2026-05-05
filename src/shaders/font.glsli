@@ -21,7 +21,7 @@ struct BufferData {
 };
 
 layout(scalar, descriptor_heap) readonly buffer InputData {
-  BufferData data;
+    BufferData data;
 } heapInputData[];
 
 layout(descriptor_heap) uniform sampler heapSampler[];

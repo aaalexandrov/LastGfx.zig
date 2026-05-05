@@ -3,15 +3,12 @@ const c = @import("cimport.zig").c;
 const vk = @import("vk_gfx.zig");
 const r = @import("renderer.zig");
 const Font = @import("fixed_font.zig");
-const descr = @import("descriptors.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer if (gpa.deinit() == .leak) {
         @panic("Leaked memory detected on exit!");
     };
-
-    //try @import("range_allocator.zig").RangeAllocTest(gpa.allocator());
 
     const activateDebugLayers = @import("builtin").mode == .Debug or @import("builtin").mode == .ReleaseSafe;
     var rend : r.Renderer = undefined;
@@ -59,9 +56,7 @@ pub fn main() !void {
     @as(*InputBuffer, @ptrCast(@alignCast(buffer.hostAddress))).* = bufContent;
 
     var font: Font = undefined;
-    defer font.deinit();
-
-    var fontImageDescriptor: vk.HeapDescriptor = undefined;
+    defer font.deinit(&rend) catch {};
 
     {
         var upload = try r.SubmitInfo.init(&rend, 1024 * 1024);
@@ -69,42 +64,9 @@ pub fn main() !void {
 
         try upload.cmds.begin();
 
-        font = try Font.initFromFile("data/font_rgba_10x20.png", &upload);
-        fontImageDescriptor = try rend.setDescriptor(&.{.image = .{.obj = &font.image}});
+        try font.initFromFile("data/font_rgba_10x20.png", linearSamplerDescriptor, &upload);
 
-        try upload.uploadDescriptors();
-
-        // const samplerUpload = try upload.staging.alloc(rend.samplers.heap.maxDescriptorSize * 1, 1);
-        // try rend.samplers.heap.writeDescriptor(&.{.sampler = .{}}, rend.samplers.heap.getDescriptorBytes(samplerUpload.buffer.hostAddress.? + samplerUpload.offset, linearSamplerDescriptor));
-        // upload.cmds.copyBuffer(samplerUpload.buffer, &rend.samplers.heap.deviceBuffer, &[_]c.VkBufferCopy2{
-        //     .{
-        //         .sType = c.VK_STRUCTURE_TYPE_BUFFER_COPY_2,
-        //         .srcOffset = samplerUpload.offset,
-        //         .size = samplerUpload.size,
-        //     },
-        // });
-
-        // const resourceUpload = try upload.staging.alloc(rend.resources.heap.maxDescriptorSize * 3, 1);
-        // const uploadBase  = resourceUpload.buffer.hostAddress.? + resourceUpload.offset;
-        // try rend.resources.heap.writeDescriptor(
-        //     &.{.image = .{.obj = &image}}, 
-        //     rend.resources.heap.getDescriptorBytes(uploadBase, imageDescriptor)
-        // );
-        // try rend.resources.heap.writeDescriptor(
-        //     &.{.image = .{.obj = &font.image}}, 
-        //     rend.resources.heap.getDescriptorBytes(uploadBase, fontImageDescriptor)
-        // );
-        // try rend.resources.heap.writeDescriptor(
-        //     &.{.buffer = .{.obj = &buffer}}, 
-        //     rend.resources.heap.getDescriptorBytes(uploadBase, bufferDescriptor)
-        // );
-        // upload.cmds.copyBuffer(resourceUpload.buffer, &rend.resources.heap.deviceBuffer, &[_]c.VkBufferCopy2{
-        //     .{
-        //         .sType = c.VK_STRUCTURE_TYPE_BUFFER_COPY_2,
-        //         .srcOffset = resourceUpload.offset,
-        //         .size = resourceUpload.size,
-        //     },
-        // });
+        try upload.uploadDescriptors(&upload.cmds);
 
         upload.cmds.imageBarrier(&image, .{}, .Graphics, .{.transferDst = true}, .Graphics);
 
@@ -210,12 +172,18 @@ pub fn main() !void {
             cmds.bindRenderPipeline(&pipeline);
             cmds.drawMeshTasks(3, 1, 1);
 
+            const pixelSize: [2]f32 = .{
+                1.0 / @as(f32, @floatFromInt(swapImage.desc.width)),
+                1.0 / @as(f32, @floatFromInt(swapImage.desc.height)),
+            };
+            try font.render("Kekekek", .{50, 50}, pixelSize, .{1, 1, 0, 1}, submit);
+
             cmds.renderEnd();
 
             cmds.imageBarrier(swapImage, .{.attachmentWrite = true}, .Graphics, .{.present = true}, .Graphics);
 
             try cmds.end();
-            try cmds.submit(&submit.submitSemaphore);
+            try submit.submit(&submit.submitSemaphore);
             commandsIndex = (commandsIndex + 1) % @as(@TypeOf(commandsIndex), @intCast(commands.items.len));
 
             window.swapchain.present(swapImage, null) catch {};
