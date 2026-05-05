@@ -7,11 +7,11 @@ pub const DescriptorHeapWriter = struct {
     descHeap: *vk.DescriptorHeap,
     memArena: std.heap.ArenaAllocator,
     updatesData: ByteArrayList,
-    updateDstToUpdateIndex: U64HashMap,
+    updateDstToUpdateIndex: U64U32HashMap,
     updatesSize: u64 = 0,
 
     const ByteArrayList = std.array_list.Aligned(u8, null);
-    const U64HashMap = std.array_hash_map.AutoArrayHashMapUnmanaged(u64, u64);
+    const U64U32HashMap = std.array_hash_map.AutoArrayHashMapUnmanaged(u64, u32);
 
     pub const Self = @This();
 
@@ -21,7 +21,7 @@ pub const DescriptorHeapWriter = struct {
             .descHeap = descHeap,
             .memArena = std.heap.ArenaAllocator.init(gfx.alloc),
             .updatesData = try ByteArrayList.initCapacity(gfx.alloc, 0),
-            .updateDstToUpdateIndex = try U64HashMap.init(gfx.alloc, &.{}, &.{}),
+            .updateDstToUpdateIndex = try U64U32HashMap.init(gfx.alloc, &.{}, &.{}),
         };
     }
 
@@ -33,36 +33,37 @@ pub const DescriptorHeapWriter = struct {
     }
 
     pub fn clear(self: *Self, freeMemory: bool) void {
+        const gfx = self.getGfx();
         if (freeMemory) {
-            self.memArena.reset(.free_all);
-            self.updatesData.clearAndFree(self.descHeap.gfx.alloc);
-            self.updateDstToUpdateIndex.clearAndFree(self.getGfx().alloc);
+            _ = self.memArena.reset(.free_all);
+            self.updatesData.clearAndFree(gfx.alloc);
+            self.updateDstToUpdateIndex.clearAndFree(gfx.alloc);
         } else {
-            self.memArena.reset(.retain_capacity);
-            self.updatesData.clearRetainingCapacity(self.getGfx().alloc);
-            self.updateDstToUpdateIndex.clearRetainingCapacity(self.getGfx().alloc);
+            _ = self.memArena.reset(.retain_capacity);
+            self.updatesData.clearRetainingCapacity();
+            self.updateDstToUpdateIndex.clearRetainingCapacity();
         }
-        self.udpatesSize = 0;
+        self.updatesSize = 0;
     }
 
-    pub fn setSampler(self: *Self, dstIndex: u64, samplerInfo: *const c.VkSamplerCreateInfo) !void {
-        const updateSlice = try self.getUpdateStructSlice(dstIndex);
-        @memcpy(updateSlice, std.mem.asBytes(samplerInfo));
-        self.updatesSize += self.getDescriptorSizeFromUpdate(updateSlice);
-    }
-
-    pub fn setBuffer(self: *Self, dstIndex: u64, buffer: *vk.Buffer, offset: u64, size: u64) !void {
-        const updateSlice = try self.getUpdateStructSlice(dstIndex);
-        const descInfo: *c.VkResourceDescriptorInfoEXT = @ptrCast(@alignCast(updateSlice));
-        try buffer.writeDescriptorData(descInfo, self.memArena.allocator(), offset, size);
-        self.updatesSize += self.getDescriptorSizeFromUpdate(updateSlice);
-    }
-
-    pub fn setImage(self: *Self, dstIndex: u64, image: *vk.Image) !void {
-        const updateSlice = try self.getUpdateStructSlice(dstIndex);
-        const descInfo: *c.VkResourceDescriptorInfoEXT = @ptrCast(@alignCast(updateSlice));
-        try image.writeDescriptorData(descInfo, self.memArena.allocator());
-        self.updatesSize += self.getDescriptorSizeFromUpdate(updateSlice);
+    pub fn setDescriptor(self: *Self, dstIndex: u32, descData: *const vk.DescriptorData) !void {
+        const descSize = self.descHeap.getDescriptorSize(descData.*);
+        const updateSlice = try self.getUpdateStructSlice(descSize, dstIndex);
+        switch (descData.*) {
+            .sampler => |*samplerDesc| {
+                const samplerInfo: *c.VkSamplerCreateInfo = @ptrCast(@alignCast(updateSlice));
+                samplerInfo.* = vk.Sampler.createInfo(samplerDesc);
+            },
+            .buffer => |*bufferView| {
+                const descInfo: *c.VkResourceDescriptorInfoEXT = @ptrCast(@alignCast(updateSlice));
+                try vk.DescriptorHeap.writeBufferDescriptorInfo(descInfo, self.memArena.allocator(), bufferView);
+            },
+            .image => |*imageView| {
+                const descInfo: *c.VkResourceDescriptorInfoEXT = @ptrCast(@alignCast(updateSlice));
+                try vk.DescriptorHeap.writeImageDescriptorInfo(descInfo, self.memArena.allocator(), imageView);
+            },
+        }
+        self.updatesSize += descSize;
     }
 
     pub fn writeDescriptors(self: *Self, dst: []u8) !void {
@@ -107,10 +108,10 @@ pub const DescriptorHeapWriter = struct {
         while (updateDst.next()) |dstToUpdateIndex| {
             const updateIdx = dstToUpdateIndex.value_ptr.*;
             const descSize = self.getDescriptorSizeFromUpdateIndex(updateStructSize, updateIdx);
-            const descIdx = dstToUpdateIndex.key_ptr.*;
+            const descOffs = dstToUpdateIndex.key_ptr.*;
             copy2[updateIdx] = .{
                 .sType = c.VK_STRUCTURE_TYPE_BUFFER_COPY_2,
-                .dstOffset = descIdx * descSize,
+                .dstOffset = descOffs,
                 .size = descSize,
             };
         }
@@ -135,12 +136,13 @@ pub const DescriptorHeapWriter = struct {
         };
     }
 
-    fn getUpdateStructSlice(self: *Self, dstIndex: u64) ![]u8 {
+    fn getUpdateStructSlice(self: *Self, descSize: u32, dstIndex: u32) ![]u8 {
         const structSize = self.getUpdateStructSize();
-        const dstToOffs = try self.updateDstToUpdateIndex.getOrPut(self.getGfx().alloc, dstIndex);
+        const dstOffs = dstIndex * descSize;
+        const dstToOffs = try self.updateDstToUpdateIndex.getOrPut(self.getGfx().alloc, dstOffs);
         if (!dstToOffs.found_existing) {
-            std.debug.assert(dstToOffs.key_ptr.* == dstIndex);
-            dstToOffs.value_ptr.* = self.updatesData.items.len / structSize;
+            std.debug.assert(dstToOffs.key_ptr.* == dstOffs);
+            dstToOffs.value_ptr.* = @intCast(self.updatesData.items.len / structSize);
             return try self.updatesData.addManyAsSlice(self.getGfx().alloc, structSize);
         }
         const structOffs = structSize * dstToOffs.value_ptr.*;
@@ -176,21 +178,40 @@ pub const DescriptorHeapWriter = struct {
 };
 
 pub const DescriptorHeapManaged = struct {
-    descHeap: vk.DescriptorHeap,
-    writer: vk.DescriptorHeapWriter,
-    rangeAlloc: range.RangeAlloc,
+    heap: vk.DescriptorHeap,
+    writer: DescriptorHeapWriter,
+    rangeAlloc: range.RangeAlloc(u64),
 
     pub const Self = @This();
 
-    pub fn init(self: *Self, gfx: *vk.Gfx, kind: vk.DescriptorHeap.Kind, numDescriptors: u64) !void {
-        self.descHeap = try vk.DescriptorHeap.init(gfx, kind, numDescriptors);
-        self.writer = try vk.DescriptorHeapWriter.init(&self.descHeap);
-        try self.rangeAlloc.init(0, self.descHeap.deviceBuffer.size - self.descHeap.reservedSize, gfx.alloc);
+    pub fn init(self: *Self, gfx: *vk.Gfx, kind: vk.DescriptorHeap.Kind, numDescriptors: u32) !void {
+        self.heap = try vk.DescriptorHeap.init(gfx, kind, numDescriptors);
+        self.writer = try DescriptorHeapWriter.init(&self.heap);
+        try self.rangeAlloc.init(0, self.heap.deviceBuffer.desc.size - self.heap.reservedSize, gfx.alloc);
     }
 
     pub fn deinit(self: *Self) void {
         self.rangeAlloc.deinit();
         self.writer.deinit();
-        self.descHeap.deinit();
+        self.heap.deinit();
+    }
+
+    pub fn clear(self: *Self) void {
+        self.rangeAlloc.clear();
+        self.writer.clear(true);
+    }
+
+    pub fn setDescriptor(self: *Self, descData: *const vk.DescriptorData) !vk.HeapDescriptor {
+        const descSize = self.heap.getDescriptorSize(descData.*);
+        const descAlign = self.heap.getDescriptorAlignment(descData.*);
+        const descOffset = try self.rangeAlloc.alloc(descSize, descAlign);
+        const desc = self.heap.getDescriptor(descData.*, descOffset);
+        try self.writer.setDescriptor(desc.index, descData);
+        return desc;
+    }
+
+    pub fn freeDescriptor(self: *Self, desc: vk.HeapDescriptor) !void {
+        const descOffset = self.heap.getDescriptorOffset(desc);
+        try self.rangeAlloc.free(descOffset);
     }
 };

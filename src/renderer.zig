@@ -195,8 +195,11 @@ pub const SubmitInfo = struct {
     cmds: vk.Commands,
     submitSemaphore: vk.Semaphore,
     staging: BufferAllocator,
+    transientDescriptors: DescriptorArray,
+    renderer: *Renderer,
 
-    const Self = @This();
+    const DescriptorArray = std.array_list.Aligned(vk.HeapDescriptor, null);
+    pub const Self = @This();
     pub fn init(renderer: *Renderer, stagingSize: u64) !Self {
         return Self{
             .cmds = try vk.Commands.init(&renderer.gfx),
@@ -206,13 +209,21 @@ pub const SubmitInfo = struct {
                     .size = stagingSize,
                     .usage = .{.hostWrite = true, .transferSrc = true},
                 }),
+            .transientDescriptors = try DescriptorArray.initCapacity(renderer.gfx.alloc, 0),
+            .renderer = renderer,
         };
     }
     pub fn deinit(self: *Self) !void {
         try self.cmds.waitFinished();
         self.cmds.deinit();
         self.submitSemaphore.deinit();
+        try self.reset();
+    }
+
+    pub fn reset(self: *Self) !void {
         self.staging.reset();
+        for (self.transientDescriptors.items) |desc|
+            try self.renderer.freeDescriptor(desc);
     }
 
     pub fn loadTexture(self: *Self, filename: [:0]const u8, usage: vk.Usage) !vk.Image {
@@ -246,7 +257,31 @@ pub const SubmitInfo = struct {
         });
 
         return image;
-    }    
+    }
+
+    pub fn uploadHeapDescriptors(self: *Self, descHeap: *DescriptorHeapManaged) !void {
+        if (descHeap.writer.updatesSize == 0)
+            return;
+        const upload = try self.staging.alloc(descHeap.writer.updatesSize, 1);
+        try descHeap.writer.uploadSetDescriptors(&self.cmds, upload.buffer, upload.offset);
+        descHeap.writer.clear(false);
+    }
+
+    pub fn uploadDescriptors(self: *Self) !void {
+        try self.uploadHeapDescriptors(&self.renderer.samplers);
+        try self.uploadHeapDescriptors(&self.renderer.resources);
+    }
+
+    pub fn bindDescriptorHeaps(self: *Self) void {
+        self.cmds.bindDescriptorHeap(&self.renderer.samplers.heap);
+        self.cmds.bindDescriptorHeap(&self.renderer.resources.heap);
+    }
+
+    pub fn setTransientDescriptor(self: *Self, descData: *const vk.DescriptorData) !void {
+        const desc = try self.renderer.setDescriptor(descData);
+        try self.transientDescriptors.append(self.renderer.gfx.alloc, desc);
+        return desc;
+    }
 };
 
 pub const Window = struct {
@@ -268,15 +303,17 @@ pub const Window = struct {
     }
 };
 
+const DescriptorHeapManaged = descr.DescriptorHeapManaged;
+
 pub const Renderer = struct {
     gfx: vk.Gfx,
-    resourceHeap: vk.DescriptorHeap,
-    samplerHeap: vk.DescriptorHeap,
+    resources: DescriptorHeapManaged,
+    samplers: DescriptorHeapManaged,
     bufferPool: BufferPool,
 
     pub const Self = @This();
 
-    pub fn init(self: *Self, alloc: std.mem.Allocator, debug: bool, numResourceDescriptors: ?u64, numSamplerDescriptors: ?u64) !void {
+    pub fn init(self: *Self, alloc: std.mem.Allocator, debug: bool, numResourceDescriptors: ?u32, numSamplerDescriptors: ?u32) !void {
         try vk.sdl_errify(c.SDL_Init(c.SDL_INIT_VIDEO));
         if (!c.SDL_Vulkan_LoadLibrary(null))
             return error.SDLCouldNotLoadVulkan;
@@ -284,21 +321,38 @@ pub const Renderer = struct {
         zstbi.init(alloc);
 
         try self.gfx.init(alloc, debug);
-        self.resourceHeap = try vk.DescriptorHeap.init(&self.gfx, .Resource, numResourceDescriptors orelse self.gfx.physical.maxResourceDescriptors());
-        self.samplerHeap = try vk.DescriptorHeap.init(&self.gfx, .Sampler, numSamplerDescriptors orelse self.gfx.physical.maxSamplerDescriptors());
+        try self.resources.init(&self.gfx, .Resource, numResourceDescriptors orelse @intCast(self.gfx.physical.maxResourceDescriptors()));
+        try self.samplers.init(&self.gfx, .Sampler, numSamplerDescriptors orelse @intCast(self.gfx.physical.maxSamplerDescriptors()));
         self.bufferPool = BufferPool.init(&self.gfx);
     }
 
     pub fn deinit(self: *Self) void {
         self.bufferPool.deinit();
-        self.samplerHeap.deinit();
-        self.resourceHeap.deinit();
+        self.samplers.deinit();
+        self.resources.deinit();
         self.gfx.deinit();
 
         zstbi.deinit();
 
         c.SDL_Vulkan_UnloadLibrary();
         c.SDL_Quit();
+    }
+
+    fn getHeapForDescriptorType(self: *Self, descType: vk.DescriptorType) *DescriptorHeapManaged {
+        return switch (descType) {
+            .sampler => &self.samplers,
+            .buffer, .image => &self.resources,
+        };
+    }
+
+    pub fn setDescriptor(self: *Self, descData: *const vk.DescriptorData) !vk.HeapDescriptor {
+        const heap = self.getHeapForDescriptorType(descData.*);
+        return heap.setDescriptor(descData);
+    }
+
+    pub fn freeDescriptor(self: *Self, desc: vk.HeapDescriptor) !void {
+        const heap = self.getHeapForDescriptorType(desc.type);
+        try heap.freeDescriptor(desc);
     }
 
     pub fn loadGraphicsPipeline(self: *Self, path: []const u8) !vk.Pipeline {
