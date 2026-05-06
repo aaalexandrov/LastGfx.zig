@@ -30,11 +30,15 @@ pub const BufferArena = struct {
         offset: u64,
         size: u64,
 
-        pub fn slice(self: @This()) []u8 {
+        pub fn slice(self: *const @This()) []u8 {
             return self.buffer.hostAddress.?[self.offset..self.offset + self.size];
         }
 
-        pub fn descriptorData(self: @This()) vk.DescriptorData {
+        pub fn deviceAddress(self: *const @This()) u64 {
+            return self.buffer.deviceAddress + self.offset;
+        }
+
+        pub fn descriptorData(self: *const @This()) vk.DescriptorData {
             return .{
                 .buffer = .{
                     .obj = self.buffer,
@@ -242,12 +246,18 @@ pub const SubmitInfo = struct {
     }
 
     pub fn submit(self: *Self, waitSemaphore: ?*vk.Semaphore) !void {
-        try self.preCmds.begin();
-        try self.uploadDescriptors(&self.preCmds);
-        try self.preCmds.end();
-
-        try self.preCmds.submit(waitSemaphore);
-        try self.cmds.submit(null);
+        const hasDescriptorUploads = self.renderer.resources.hasPendingUploads() or self.renderer.samplers.hasPendingUploads();
+        if (hasDescriptorUploads) {
+            try self.preCmds.begin();
+            try self.uploadDescriptors(&self.preCmds);
+            try self.preCmds.end();
+            try self.renderer.gfx.submit(
+                @constCast(&[_]*vk.Commands{&self.preCmds, &self.cmds}),
+                waitSemaphore
+            );
+        } else {
+            try self.cmds.submit(waitSemaphore);
+        }
     }
 
     pub fn loadTexture(self: *Self, filename: [:0]const u8, usage: vk.Usage) !vk.Image {

@@ -41,7 +41,6 @@ pub fn main() !void {
     const linearSamplerDescriptor = try rend.setDescriptor(&.{.sampler=.{}});
 
     const imageDescriptor = try rend.setDescriptor(&.{.image = .{.obj = &image}});
-    const bufferDescriptor = try rend.setDescriptor(&.{.buffer = .{.obj = &buffer}});
 
     const InputBuffer = extern struct {
         color: [4]f32,
@@ -167,7 +166,7 @@ pub fn main() !void {
             });
             cmds.setScissor(&viewRect);
 
-            cmds.pushData(&bufferDescriptor.index);
+            cmds.pushData(&buffer.deviceAddress);
 
             cmds.bindRenderPipeline(&pipeline);
             cmds.drawMeshTasks(3, 1, 1);

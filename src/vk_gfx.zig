@@ -256,6 +256,35 @@ pub const Gfx = struct {
         return device;
     }
 
+    pub fn submit(self: *Self, cmds:[]*Commands, waitSemaphore: ?*Semaphore) !void {
+        const bufferSubmits = try self.alloc.alloc(c.VkCommandBufferSubmitInfo, cmds.len);
+        defer self.alloc.free(bufferSubmits);
+
+        for (cmds, bufferSubmits) |cmd, *bufSubmit| {
+            bufSubmit.* = .{
+                .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+                .commandBuffer = cmd.handle,
+            };
+        }
+
+        try check(c.vkQueueSubmit2(
+            self.device.universalQueue,
+            1,
+            &c.VkSubmitInfo2{
+                .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+                .waitSemaphoreInfoCount = @intFromBool(waitSemaphore != null),
+                .pWaitSemaphoreInfos = &c.VkSemaphoreSubmitInfo{
+                    .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                    .semaphore = if (waitSemaphore != null) waitSemaphore.?.handle else null,
+                    .stageMask = c.VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
+                },
+                .commandBufferInfoCount = @intCast(bufferSubmits.len),
+                .pCommandBufferInfos = bufferSubmits.ptr,
+            },
+            cmds[cmds.len-1].fence,
+        ));
+    }
+
     pub fn waitIdle(self: *Self) !void {
         try check(c.vkDeviceWaitIdle(self.device.handle));
     }

@@ -132,11 +132,9 @@ pub fn render(self: *Self, str: []const u8, startPos: [2]f32, pixelSize: [2]f32,
         pos[0] += quadSize[0];
     }
     
-    const bufferDesc = try submit.setTransientDescriptor(&buffer.descriptorData());
-
     submit.cmds.bindRenderPipeline(&Self.pipeline);
 
-    submit.cmds.pushData(&bufferDesc.index);
+    submit.cmds.pushData(&buffer.deviceAddress());
     submit.cmds.drawMeshTasks(@intCast((str.len + 31) / 32), 1, 1);
 }
 

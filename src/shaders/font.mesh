@@ -11,7 +11,7 @@ layout(triangles, max_vertices = 128, max_primitives = 64) out;
 void main()
 {
     uint charIndex = gl_GlobalInvocationID.x;
-    uint numCharacters = heapInputData[pushData.inputDataBufferIndex].data.numCharacters;
+    uint numCharacters = pushData.inputData.data.numCharacters;
 
     if (charIndex >= numCharacters)
         return;
@@ -22,12 +22,9 @@ void main()
         SetMeshOutputsEXT(vertexCount, triangleCount);  
     }
 
-    vec2 quadSize = heapInputData[pushData.inputDataBufferIndex].data.quadSize;
+    vec2 quadSize = pushData.inputData.data.quadSize;
 
-    CharData ch;
-    // The offset of 3 below is due to the NVidia driver indexing incorrectly. This should be removed when this bug gets fixed.
-    ch.coordinates = heapInputData[pushData.inputDataBufferIndex].data.characters[charIndex + 3].coordinates;
-    ch.layer = heapInputData[pushData.inputDataBufferIndex].data.characters[charIndex + 3].layer;
+    CharData ch = pushData.inputData.data.characters[charIndex];
 
     uint baseVertex = 4 * charIndex;
 

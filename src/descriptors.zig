@@ -214,4 +214,8 @@ pub const DescriptorHeapManaged = struct {
         const descOffset = self.heap.getDescriptorOffset(desc);
         try self.rangeAlloc.free(descOffset);
     }
+
+    pub fn hasPendingUploads(self: *Self) bool {
+        return self.writer.updatesSize > 0;
+    }
 };
