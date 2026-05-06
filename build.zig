@@ -26,6 +26,13 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = b.path("src/cimport/c.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    exe_mod.addImport("c", translate_c.createModule());
+
     const sdl_dep = b.dependency("sdl", .{
         .target = target,
         .optimize = optimize,
@@ -40,11 +47,12 @@ pub fn build(b: *std.Build) !void {
     const sdl_lib = sdl_dep.artifact("SDL3");
     exe_mod.linkLibrary(sdl_lib);
 
-    exe_mod.addCSourceFile(.{.file = .{ .cwd_relative = "./src/vk_mem_alloc.cpp" }});
+    exe_mod.addCSourceFile(.{.file = .{ .cwd_relative = "./src/cimport/vk_mem_alloc.cpp" }});
+    exe_mod.addCSourceFile(.{.file = .{ .cwd_relative = "./src/cimport/stb_image.cpp" }});
     exe_mod.link_libcpp = true;
 
     if (target.result.os.tag == .windows) {
-        const env_map = try std.process.getEnvMap(b.allocator);
+        const env_map = &b.graph.environ_map;
         if (env_map.get("VK_SDK_PATH")) |path| {
             exe_mod.addLibraryPath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/lib", .{path}) catch @panic("OOM") });
             exe_mod.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include", .{path}) catch @panic("OOM") });
@@ -53,9 +61,6 @@ pub fn build(b: *std.Build) !void {
     }
     const vk_lib_name = if (target.result.os.tag == .windows) "vulkan-1" else "vulkan";
     exe_mod.linkSystemLibrary(vk_lib_name, .{});
-
-    const zstbi = b.dependency("zstbi", .{});
-    exe_mod.addImport("zstbi", zstbi.module("root"));
 
     // This creates another `std.Build.Step.Compile`, but this one builds an executable
     // rather than a static library.
@@ -118,9 +123,9 @@ pub fn build(b: *std.Build) !void {
 
 fn compileShaders(b: *std.Build, srcPath: []const u8, dstPath: []const u8) !void {
     var installStep = b.step("Install SPV", "ditto");
-    var dir = std.fs.cwd().openDir(srcPath, .{ .iterate = true }) catch unreachable;
+    var dir = std.Io.Dir.cwd().openDir(b.graph.io, srcPath, .{ .iterate = true }) catch unreachable;
     var it = dir.iterate();
-    while (it.next() catch unreachable) |entry| {
+    while (it.next(b.graph.io) catch unreachable) |entry| {
         if (entry.kind == .file and (std.mem.endsWith(u8, entry.name, ".mesh") or
             std.mem.endsWith(u8, entry.name, ".frag")))
         {

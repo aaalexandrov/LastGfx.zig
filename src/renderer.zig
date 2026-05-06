@@ -1,7 +1,6 @@
 const std = @import("std");
-const c = @import("cimport.zig").c;
+const c = @import("c");
 const vk = @import("vk_gfx.zig");
-const zstbi = @import("zstbi");
 const descr = @import("descriptors.zig");
 
 fn ListNode(List: type, T: type) type {
@@ -205,6 +204,33 @@ pub const BufferAllocator = struct {
     }
 };
 
+pub const STBImage = struct {
+    width: u32 = 0,
+    height: u32 = 0,
+    channelsInFile: u8 = 0,
+    data: [*c]u8 = null,
+
+    pub const Self = @This();
+
+    pub fn load(imagePath: [:0]const u8, desiredChannels: i32) !Self {
+        var self: Self = undefined;
+        var width: i32 = undefined;
+        var height: i32 = undefined;
+        var chans: i32 = undefined;
+        self.data = c.stbi_load(imagePath, &width, &height, &chans, desiredChannels);
+        if (self.data == null)
+            return error.STBImageLoadFailed;
+        self.width = @intCast(width);
+        self.height = @intCast(height);
+        self.channelsInFile = @intCast(chans);
+        return self;
+    }
+
+    pub fn deinit(self: *Self) void {
+        c.stbi_image_free(self.data);
+    }
+};
+
 pub const SubmitInfo = struct {
     preCmds: vk.Commands,
     cmds: vk.Commands,
@@ -266,8 +292,7 @@ pub const SubmitInfo = struct {
     pub fn loadTexture(self: *Self, filename: [:0]const u8, usage: vk.Usage) !vk.Image {
         std.debug.assert(usage.transferDst);
 
-        var loaded = try zstbi.Image.loadFromFile(filename, 4);
-        defer loaded.deinit();
+        var loaded = try STBImage.load(filename, 4);
 
         const image = try vk.Image.init(self.cmds.gfx, &.{
             .format = c.VK_FORMAT_R8G8B8A8_UNORM,
@@ -350,14 +375,12 @@ pub const Renderer = struct {
 
     pub const Self = @This();
 
-    pub fn init(self: *Self, alloc: std.mem.Allocator, debug: bool, numResourceDescriptors: ?u32, numSamplerDescriptors: ?u32) !void {
+    pub fn init(self: *Self, alloc: std.mem.Allocator, io: std.Io, debug: bool, numResourceDescriptors: ?u32, numSamplerDescriptors: ?u32) !void {
         try vk.sdl_errify(c.SDL_Init(c.SDL_INIT_VIDEO));
         if (!c.SDL_Vulkan_LoadLibrary(null))
             return error.SDLCouldNotLoadVulkan;
 
-        zstbi.init(alloc);
-
-        try self.gfx.init(alloc, debug);
+        try self.gfx.init(alloc, io, debug);
         try self.resources.init(&self.gfx, .Resource, numResourceDescriptors orelse @intCast(self.gfx.physical.maxResourceDescriptors()));
         try self.samplers.init(&self.gfx, .Sampler, numSamplerDescriptors orelse @intCast(self.gfx.physical.maxSamplerDescriptors()));
         self.bufferPool = BufferPool.init(&self.gfx);
@@ -368,8 +391,6 @@ pub const Renderer = struct {
         self.samplers.deinit();
         self.resources.deinit();
         self.gfx.deinit();
-
-        zstbi.deinit();
 
         c.SDL_Vulkan_UnloadLibrary();
         c.SDL_Quit();

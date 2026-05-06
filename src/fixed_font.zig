@@ -1,7 +1,6 @@
 const std = @import("std");
-const c = @import("cimport.zig").c;
+const c = @import("c");
 const vk = @import("vk_gfx.zig");
-const zstbi = @import("zstbi");
 const r = @import("renderer.zig");
 
 image: vk.Image,
@@ -22,7 +21,7 @@ pub fn init(self: *Self, renderer: *r.Renderer, fontName: []const u8, fontImage:
 
 pub fn initFromFile(self: *Self, imagePath: [:0]const u8, samplerDesc: vk.HeapDescriptor, submit: *r.SubmitInfo) !void {
     const glyphSize = try glyphSizeFromPath(imagePath);
-    var loaded = try zstbi.Image.loadFromFile(imagePath, 4);
+    var loaded = try r.STBImage.load(imagePath, 4);
     defer loaded.deinit();
 
     std.debug.assert(loaded.width % glyphSize[0] == 0);

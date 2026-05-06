@@ -1,5 +1,5 @@
 const std = @import("std");
-const c = @import("cimport.zig").c;
+const c = @import("c");
 const vk = @import("vk_gfx.zig");
 const range = @import("range_allocator.zig");
 
@@ -11,7 +11,7 @@ pub const DescriptorHeapWriter = struct {
     updatesSize: u64 = 0,
 
     const ByteArrayList = std.array_list.Aligned(u8, null);
-    const U64U32HashMap = std.array_hash_map.AutoArrayHashMapUnmanaged(u64, u32);
+    const U64U32HashMap = std.array_hash_map.Auto(u64, u32);
 
     pub const Self = @This();
 

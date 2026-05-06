@@ -1,5 +1,5 @@
 const std = @import("std");
-const c = @import("cimport.zig").c;
+const c = @import("c");
 
 fn DebugCallback(severity: c.VkDebugUtilsMessageSeverityFlagBitsEXT, msgType: c.VkDebugUtilsMessageTypeFlagsEXT, cbData: [*c]const c.VkDebugUtilsMessengerCallbackDataEXT, userData: ?*anyopaque) callconv(.c) c.VkBool32 {
     _ = userData;
@@ -24,6 +24,7 @@ fn DebugCallback(severity: c.VkDebugUtilsMessageSeverityFlagBitsEXT, msgType: c.
 pub const Gfx = struct {
     alloc: std.mem.Allocator,
     allocCB: ?*c.VkAllocationCallbacks = null,
+    io: std.Io,
     instance: c.VkInstance = null,
     dbgMessenger: c.VkDebugUtilsMessengerEXT = null,
     physical: PhysicalDevice,
@@ -42,9 +43,10 @@ pub const Gfx = struct {
     pub const API_VERSION = c.VK_API_VERSION_1_4;
     pub const Self = @This();
 
-    pub fn init(self: *Self, allocator: std.mem.Allocator, debug: bool) !void {
+    pub fn init(self: *Self, allocator: std.mem.Allocator, io: std.Io, debug: bool) !void {
         self.alloc = allocator;
         self.allocCB = null;
+        self.io = io;
 
         var layers = try std.ArrayList([*c]const u8).initCapacity(self.alloc, 0);
         defer layers.deinit(self.alloc);
@@ -854,10 +856,11 @@ pub const Shader = struct {
 
     pub fn init(gfx: *Gfx, filename: [:0]const u8) !Self {
         var exePathBuf: [std.fs.max_path_bytes]u8 = undefined;
-        const exePath = try std.fs.selfExeDirPath(&exePathBuf);
+        const exePathLen = try std.process.executableDirPath(gfx.io, &exePathBuf);
+        const exePath = exePathBuf[0..exePathLen];
         const relativePath = try std.fs.path.join(gfx.alloc, &.{ exePath, filename });
         defer gfx.alloc.free(relativePath);
-        const code = try std.fs.cwd().readFileAllocOptions(gfx.alloc, relativePath, 10 * 1024 * 1024, null, std.mem.Alignment.of(u32), null);
+        const code = try std.Io.Dir.cwd().readFileAllocOptions(gfx.io, relativePath, gfx.alloc, .unlimited, std.mem.Alignment.of(u32), null);
         defer gfx.alloc.free(code);
         std.debug.assert(code.len % 4 == 0);
         var self = try initCode(gfx, @as([*]const u32, @ptrCast(@alignCast(code.ptr)))[0..(code.len)]);

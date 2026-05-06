@@ -1,17 +1,12 @@
 const std = @import("std");
-const c = @import("cimport.zig").c;
+const c = @import("c");
 const vk = @import("vk_gfx.zig");
 const r = @import("renderer.zig");
 const Font = @import("fixed_font.zig");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer if (gpa.deinit() == .leak) {
-        @panic("Leaked memory detected on exit!");
-    };
-
+pub fn main(init: std.process.Init) !void {
     var rend : r.Renderer = undefined;
-    try rend.init(gpa.allocator(), std.debug.runtime_safety, 1024, 256);
+    try rend.init(init.gpa, init.io, std.debug.runtime_safety, 1024, 256);
     defer rend.deinit();
 
     var window = try r.Window.init(&rend, "LastGfx", 400, 300, c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_VULKAN);
@@ -95,10 +90,10 @@ pub fn main() !void {
         try upload.cmds.waitFinished();
     }
 
-    const timeStartMS = std.time.milliTimestamp();
+    const timeStartMS = std.Io.Timestamp.now(init.io, .real).toMilliseconds();
     var frames: i64 = 0;
     defer {
-        const elapsed: f64 = @as(f64, @floatFromInt(std.time.milliTimestamp() - timeStartMS)) / @as(f64, @floatFromInt(std.time.ms_per_s));
+        const elapsed: f64 = @as(f64, @floatFromInt(std.Io.Timestamp.now(init.io, .real).toMilliseconds() - timeStartMS)) / @as(f64, @floatFromInt(std.time.ms_per_s));
         std.log.info("Frames: {}, seconds: {d:1.3}, average FPS: {d:1.3}", .{frames, elapsed, @as(f64, @floatFromInt(frames)) / elapsed});
     }
 
