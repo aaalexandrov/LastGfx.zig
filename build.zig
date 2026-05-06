@@ -26,11 +26,21 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    const windowsVulkanSDKPath = 
+        if (target.result.os.tag == .windows) 
+            b.graph.environ_map.get("VK_SDK_PATH")
+        else
+            null;
+
     const translate_c = b.addTranslateC(.{
         .root_source_file = b.path("src/cimport/c.h"),
         .target = target,
         .optimize = optimize,
     });
+    if (windowsVulkanSDKPath) |path| {
+        translate_c.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include", .{path}) catch @panic("OOM") });
+        translate_c.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include/vma", .{path}) catch @panic("OOM") });
+    }
     exe_mod.addImport("c", translate_c.createModule());
 
     const sdl_dep = b.dependency("sdl", .{
@@ -48,16 +58,13 @@ pub fn build(b: *std.Build) !void {
     exe_mod.linkLibrary(sdl_lib);
 
     exe_mod.addCSourceFile(.{.file = .{ .cwd_relative = "./src/cimport/vk_mem_alloc.cpp" }});
-    exe_mod.addCSourceFile(.{.file = .{ .cwd_relative = "./src/cimport/stb_image.cpp" }});
+    exe_mod.addCSourceFile(.{.file = .{ .cwd_relative = "./src/cimport/stb_image.c" }});
     exe_mod.link_libcpp = true;
 
-    if (target.result.os.tag == .windows) {
-        const env_map = &b.graph.environ_map;
-        if (env_map.get("VK_SDK_PATH")) |path| {
-            exe_mod.addLibraryPath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/lib", .{path}) catch @panic("OOM") });
-            exe_mod.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include", .{path}) catch @panic("OOM") });
-            exe_mod.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include/vma", .{path}) catch @panic("OOM") });
-        }
+    if (windowsVulkanSDKPath) |path| {
+        exe_mod.addLibraryPath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/lib", .{path}) catch @panic("OOM") });
+        exe_mod.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include", .{path}) catch @panic("OOM") });
+        exe_mod.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include/vma", .{path}) catch @panic("OOM") });
     }
     const vk_lib_name = if (target.result.os.tag == .windows) "vulkan-1" else "vulkan";
     exe_mod.linkSystemLibrary(vk_lib_name, .{});
