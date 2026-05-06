@@ -24,7 +24,7 @@ void main()
 
     vec2 quadSize = pushData.inputData.data.quadSize;
 
-    CharData ch = pushData.inputData.data.characters[charIndex];
+    CharData ch = pushData.inputData.characters[charIndex];
 
     uint baseVertex = 4 * charIndex;
 

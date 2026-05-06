@@ -99,12 +99,11 @@ pub fn render(self: *Self, str: []const u8, startPos: [2]f32, pixelSize: [2]f32,
         samplerIndex: u32,
         quadSize: [2]f32,
         numCharacters: u32,
-        characters: [4 * 1024]CharData,
+    };
 
-        const CharData = extern struct {
-            coordinates: [2]f32,
-            layer: u32,
-        };
+    const CharData = extern struct {
+        coordinates: [2]f32,
+        layer: u32,
     };
 
     const quadSize: [2]f32 = .{
@@ -112,20 +111,22 @@ pub fn render(self: *Self, str: []const u8, startPos: [2]f32, pixelSize: [2]f32,
         @as(f32, @floatFromInt(self.image.desc.height)) * pixelSize[1],
     };
 
-    const buffer = try submit.staging.alloc(@sizeOf(BufferData) + @sizeOf(BufferData.CharData) * str.len - @sizeOf(BufferData.CharData) * (4 * 1024), 16);
-    const bufferData: *BufferData = @ptrCast(@alignCast(buffer.slice().ptr));
-    bufferData.inColor = color;
-    bufferData.texIndex = self.imageDescriptor.index;
-    bufferData.samplerIndex = self.samplerDescriptor.index;
-    bufferData.quadSize = quadSize;
-    bufferData.numCharacters = @intCast(str.len);
+    const buffer = try submit.staging.alloc(@sizeOf(BufferData) + @sizeOf(CharData) * str.len, 16);
+    const bufferData: [*]BufferData = @ptrCast(@alignCast(buffer.buffer.hostAddress.?));
+    bufferData[0].inColor = color;
+    bufferData[0].texIndex = self.imageDescriptor.index;
+    bufferData[0].samplerIndex = self.samplerDescriptor.index;
+    bufferData[0].quadSize = quadSize;
+    bufferData[0].numCharacters = @intCast(str.len);
+
+    const characters: [*]CharData = @ptrCast(&bufferData[1]);
 
     var pos: [2]f32 = .{
         startPos[0] * pixelSize[0],
         startPos[1] * pixelSize[1],
     };
     for (str, 0..) |ch, i| {
-        bufferData.characters[i] = .{
+        characters[i] = .{
             .coordinates = pos,
             .layer = self.getCharLayer(ch),
         };

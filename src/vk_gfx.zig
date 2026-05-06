@@ -256,9 +256,12 @@ pub const Gfx = struct {
         return device;
     }
 
-    pub fn submit(self: *Self, cmds:[]*Commands, waitSemaphore: ?*Semaphore) !void {
-        const bufferSubmits = try self.alloc.alloc(c.VkCommandBufferSubmitInfo, cmds.len);
-        defer self.alloc.free(bufferSubmits);
+    pub fn submit(self: *Self, cmds:[]*Commands, waitSemaphore: ?*Semaphore, signalFence: c.VkFence) !void {
+        var stackSpace = std.heap.stackFallback(16 * @sizeOf(c.VkCommandBufferSubmitInfo), self.alloc);
+        const stackAlloc = stackSpace.get();
+
+        const bufferSubmits = try stackAlloc.alloc(c.VkCommandBufferSubmitInfo, cmds.len);
+        defer stackAlloc.free(bufferSubmits);
 
         for (cmds, bufferSubmits) |cmd, *bufSubmit| {
             bufSubmit.* = .{
@@ -281,7 +284,7 @@ pub const Gfx = struct {
                 .commandBufferInfoCount = @intCast(bufferSubmits.len),
                 .pCommandBufferInfos = bufferSubmits.ptr,
             },
-            cmds[cmds.len-1].fence,
+            signalFence,
         ));
     }
 
@@ -642,25 +645,7 @@ pub const Commands = struct {
     }
 
     pub fn submit(self: *Self, waitSemaphore: ?*Semaphore) !void {
-        try check(c.vkQueueSubmit2(
-            self.gfx.device.universalQueue,
-            1,
-            &c.VkSubmitInfo2{
-                .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-                .waitSemaphoreInfoCount = @intFromBool(waitSemaphore != null),
-                .pWaitSemaphoreInfos = &c.VkSemaphoreSubmitInfo{
-                    .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                    .semaphore = if (waitSemaphore != null) waitSemaphore.?.handle else null,
-                    .stageMask = c.VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
-                },
-                .commandBufferInfoCount = 1,
-                .pCommandBufferInfos = &c.VkCommandBufferSubmitInfo{
-                    .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
-                    .commandBuffer = self.handle,
-                },
-            },
-            self.fence,
-        ));
+        try self.gfx.submit(@constCast(&[_]*Commands{self}), waitSemaphore, self.fence);
     }
 
     pub fn waitFinished(self: *Self) !void {

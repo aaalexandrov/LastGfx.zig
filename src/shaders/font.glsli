@@ -14,11 +14,11 @@ struct BufferData {
     uint samplerIndex;
     vec2 quadSize;
     uint numCharacters;
-    CharData characters[1024 * 4];
 };
 
 layout(scalar, buffer_reference, buffer_reference_align = 8) readonly buffer InputData {
     BufferData data;
+    CharData characters[];
 };
 
 layout(push_constant) uniform constants {

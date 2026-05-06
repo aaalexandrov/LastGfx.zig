@@ -247,17 +247,20 @@ pub const SubmitInfo = struct {
 
     pub fn submit(self: *Self, waitSemaphore: ?*vk.Semaphore) !void {
         const hasDescriptorUploads = self.renderer.resources.hasPendingUploads() or self.renderer.samplers.hasPendingUploads();
+        var cmds = [_]*vk.Commands{
+            &self.preCmds,
+            &self.cmds,
+        };
         if (hasDescriptorUploads) {
             try self.preCmds.begin();
             try self.uploadDescriptors(&self.preCmds);
             try self.preCmds.end();
-            try self.renderer.gfx.submit(
-                @constCast(&[_]*vk.Commands{&self.preCmds, &self.cmds}),
-                waitSemaphore
-            );
-        } else {
-            try self.cmds.submit(waitSemaphore);
         }
+        try self.renderer.gfx.submit(
+            cmds[@intFromBool(!hasDescriptorUploads)..],
+            waitSemaphore,
+            self.cmds.fence
+        );
     }
 
     pub fn loadTexture(self: *Self, filename: [:0]const u8, usage: vk.Usage) !vk.Image {

@@ -10,9 +10,8 @@ pub fn main() !void {
         @panic("Leaked memory detected on exit!");
     };
 
-    const activateDebugLayers = @import("builtin").mode == .Debug or @import("builtin").mode == .ReleaseSafe;
     var rend : r.Renderer = undefined;
-    try rend.init(gpa.allocator(), activateDebugLayers, 1024, 256);
+    try rend.init(gpa.allocator(), std.debug.runtime_safety, 1024, 256);
     defer rend.deinit();
 
     var window = try r.Window.init(&rend, "LastGfx", 400, 300, c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_VULKAN);
