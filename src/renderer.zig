@@ -413,7 +413,7 @@ pub const Renderer = struct {
         try heap.freeDescriptor(desc);
     }
 
-    pub fn loadGraphicsPipeline(self: *Self, path: []const u8) !vk.Pipeline {
+    pub fn loadGraphicsPipeline(self: *Self, path: []const u8, state: *const vk.Pipeline.GraphicsState) !vk.Pipeline {
         var shaderMesh = mesh: {
             const meshName = try std.mem.joinZ(self.gfx.alloc, "", &[_][]const u8{ path, ".mesh.spv" });
             defer self.gfx.alloc.free(meshName);
@@ -428,7 +428,7 @@ pub const Renderer = struct {
         };
         defer shaderFrag.deinit(&self.gfx);
 
-        const pipeline = try vk.Pipeline.initGraphics(&self.gfx, &shaderMesh, &shaderFrag, path);
+        const pipeline = try vk.Pipeline.initGraphics(&self.gfx, &shaderMesh, &shaderFrag, state, path);
         return pipeline;
     }
 

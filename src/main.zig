@@ -12,10 +12,16 @@ pub fn main(init: std.process.Init) !void {
     var window = try r.Window.init(&rend, "LastGfx", 400, 300, c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_VULKAN);
     defer window.deinit() catch {};
 
-    try Font.initStatic(&rend, "shaders/font");
+    try Font.initStatic(&rend, "shaders/font", rend.gfx.swapchainFormat);
     defer Font.deinitStatic(&rend);
 
-    var pipeline = try rend.loadGraphicsPipeline("shaders/triangle");
+    var pipeline = try rend.loadGraphicsPipeline("shaders/triangle", &.{
+        .colorAttachments = @constCast(&[_]vk.Pipeline.GraphicsState.ColorAttachment{
+            .{
+                .format = rend.gfx.swapchainFormat,
+            }
+        })
+    });
     defer pipeline.deinit(&rend.gfx);
 
 

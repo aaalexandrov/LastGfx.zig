@@ -894,9 +894,43 @@ pub const Pipeline = struct {
         Compute,
     };
 
+    pub const GraphicsState = struct {
+        polygonMode: c.VkPolygonMode = c.VK_POLYGON_MODE_FILL,
+        cullMode: c.VkCullModeFlags = c.VK_CULL_MODE_NONE,
+        frontFace: c.VkFrontFace = c.VK_FRONT_FACE_CLOCKWISE,
+        depthWrite: bool = false,
+        depthCompareOp: c.VkCompareOp = c.VK_COMPARE_OP_ALWAYS,
+        depthAttachmentFormat: c.VkFormat = c.VK_FORMAT_UNDEFINED,
+        stencilAttachmentFormat: c.VkFormat = c.VK_FORMAT_UNDEFINED,
+        colorAttachments: []ColorAttachment = &.{},
+        blendConstants: [4]f32 = .{0, 0, 0, 0},
+
+        pub const BlendMode = enum(u8) {
+            solid,
+            srcAlpha,
+        };
+
+        pub const ColorAttachment = struct {
+            format: c.VkFormat = c.VK_FORMAT_UNDEFINED,
+            blend: BlendMode = .solid,
+        };
+
+        fn getBlendState(mode: BlendMode) c.VkPipelineColorBlendAttachmentState {
+            return c.VkPipelineColorBlendAttachmentState{
+                .blendEnable = @intFromBool(mode != .solid),
+                .colorBlendOp = c.VK_BLEND_OP_ADD,
+                .srcColorBlendFactor = c.VK_BLEND_FACTOR_SRC_ALPHA,
+                .srcAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE,
+                .dstColorBlendFactor = c.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                .dstAlphaBlendFactor = c.VK_BLEND_FACTOR_ZERO,
+                .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT,
+            };
+        }
+    };
+
     pub const Self = @This();
 
-    pub fn initGraphics(gfx: *Gfx, meshShader: *const Shader, fragShader: *const Shader, name: []const u8) !Self {
+    pub fn initGraphics(gfx: *Gfx, meshShader: *const Shader, fragShader: *const Shader, state: *const GraphicsState, name: []const u8) !Self {
         var self = Self{
             .kind = .Graphics,
         };
@@ -918,6 +952,16 @@ pub const Pipeline = struct {
             c.VK_DYNAMIC_STATE_VIEWPORT,
             c.VK_DYNAMIC_STATE_SCISSOR,
         };
+
+        const numColorAttachments: u32 = @intCast(state.colorAttachments.len);
+        var colorAttachments: [8]c.VkPipelineColorBlendAttachmentState = undefined;
+        var colorAttachmentFormats: [8]c.VkFormat = undefined;
+        std.debug.assert(state.colorAttachments.len <= colorAttachments.len);
+        for (state.colorAttachments, 0..) |*colorAttach, i| {
+            colorAttachments[i] = GraphicsState.getBlendState(colorAttach.blend);
+            colorAttachmentFormats[i] = colorAttach.format;
+        }
+
         try check(c.vkCreateGraphicsPipelines(gfx.device.handle, null, 1, &c.VkGraphicsPipelineCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
             .flags = 0,
@@ -935,17 +979,21 @@ pub const Pipeline = struct {
             },
             .pRasterizationState = &c.VkPipelineRasterizationStateCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-                .polygonMode = c.VK_POLYGON_MODE_FILL,
+                .polygonMode = state.polygonMode,
                 .lineWidth = 1.0,
-                .cullMode = c.VK_CULL_MODE_NONE,
-                .frontFace = c.VK_FRONT_FACE_CLOCKWISE,
+                .cullMode = state.cullMode,
+                .frontFace = state.frontFace,
+            },
+            .pDepthStencilState = &c.VkPipelineDepthStencilStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+                .depthWriteEnable = if (state.depthWrite) c.VK_TRUE else c.VK_FALSE,
+                .depthTestEnable = if (state.depthCompareOp != c.VK_COMPARE_OP_ALWAYS) c.VK_TRUE else c.VK_FALSE,
+                .depthCompareOp = state.depthCompareOp,
             },
             .pColorBlendState = &c.VkPipelineColorBlendStateCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-                .attachmentCount = 1,
-                .pAttachments = &c.VkPipelineColorBlendAttachmentState{
-                    .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT,
-                },
+                .attachmentCount = numColorAttachments,
+                .pAttachments = &colorAttachments,
             },
             .pViewportState = &c.VkPipelineViewportStateCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
@@ -954,8 +1002,10 @@ pub const Pipeline = struct {
             },
             .pNext = @constCast(&c.VkPipelineRenderingCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-                .colorAttachmentCount = 1,
-                .pColorAttachmentFormats = &gfx.swapchainFormat,
+                .depthAttachmentFormat = state.depthAttachmentFormat,
+                .stencilAttachmentFormat = state.stencilAttachmentFormat,
+                .colorAttachmentCount = numColorAttachments,
+                .pColorAttachmentFormats = &colorAttachmentFormats,
                 .pNext = @constCast(&c.VkPipelineCreateFlags2CreateInfo{
                     .sType = c.VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO,
                     .flags = c.VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT,

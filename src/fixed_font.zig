@@ -75,8 +75,15 @@ pub fn deinit(self: *Self, renderer: *r.Renderer) !void {
     self.image.deinit();
 }
 
-pub fn initStatic(renderer: *r.Renderer, shaderPath: []const u8) !void {
-    pipeline = try renderer.loadGraphicsPipeline(shaderPath);
+pub fn initStatic(renderer: *r.Renderer, shaderPath: []const u8, attachmentFormat: c.VkFormat) !void {
+    pipeline = try renderer.loadGraphicsPipeline(shaderPath, &vk.Pipeline.GraphicsState{
+        .colorAttachments = @constCast(&[_]vk.Pipeline.GraphicsState.ColorAttachment{
+            .{
+                .format = attachmentFormat,
+                .blend = .srcAlpha,
+            },
+        }),
+    });
 }
 
 pub fn deinitStatic(renderer: *r.Renderer) void {
