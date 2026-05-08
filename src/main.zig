@@ -96,10 +96,10 @@ pub fn main(init: std.process.Init) !void {
         try upload.cmds.waitFinished();
     }
 
-    const timeStartMS = std.Io.Timestamp.now(init.io, .real).toMilliseconds();
+    const timeStart = std.Io.Timestamp.now(init.io, .real);
     var frames: i64 = 0;
     defer {
-        const elapsed: f64 = @as(f64, @floatFromInt(std.Io.Timestamp.now(init.io, .real).toMilliseconds() - timeStartMS)) / @as(f64, @floatFromInt(std.time.ms_per_s));
+        const elapsed: f64 = @as(f64, @floatFromInt(timeStart.untilNow(init.io, .real).toMilliseconds())) / @as(f64, @floatFromInt(std.time.ms_per_s));
         std.log.info("Frames: {}, seconds: {d:1.3}, average FPS: {d:1.3}", .{frames, elapsed, @as(f64, @floatFromInt(frames)) / elapsed});
     }
 
