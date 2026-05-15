@@ -26,7 +26,8 @@ void main()
 
     CharData ch = pushData.inputData.characters[charIndex];
 
-    uint baseVertex = 4 * charIndex;
+    uint baseChar = charIndex % gl_WorkGroupSize.x;
+    uint baseVertex = 4 * baseChar;
 
     for (uint i = 0; i < 4; ++i) {
         vec2 uv = vec2(i % 2, i / 2);
@@ -34,7 +35,7 @@ void main()
         uvlayer[i + baseVertex] = vec3(uv, ch.layer);
     }
 
-    uint basePrim = 2 * charIndex;
+    uint basePrim = 2 * baseChar;
     gl_PrimitiveTriangleIndicesEXT[0 + basePrim] =  uvec3(baseVertex + 0, baseVertex + 1, baseVertex + 2);
     gl_PrimitiveTriangleIndicesEXT[1 + basePrim] =  uvec3(baseVertex + 2, baseVertex + 1, baseVertex + 3);
 }

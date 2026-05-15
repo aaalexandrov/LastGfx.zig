@@ -1,8 +1,8 @@
 const std = @import("std");
 const c = @import("c");
 const vk = @import("vk_gfx.zig");
-const r = @import("renderer.zig");
-const Font = @import("fixed_font.zig");
+const r = @import("renderer/renderer.zig");
+const Font = @import("renderer/fixed_font.zig");
 
 pub fn main(init: std.process.Init) !void {
     var rend : r.Renderer = undefined;
@@ -175,7 +175,7 @@ pub fn main(init: std.process.Init) !void {
                 1.0 / @as(f32, @floatFromInt(swapImage.desc.width)),
                 1.0 / @as(f32, @floatFromInt(swapImage.desc.height)),
             };
-            try font.render("Kekekek", .{50, 50}, pixelSize, .{1, 1, 0, 1}, submit);
+            try font.render("Kekekekekekekekekekekekekekekekekekekekekekekekekekekekekekekekekekz", .{50, 50}, pixelSize, .{1, 1, 0, 1}, submit);
 
             cmds.renderEnd();
 

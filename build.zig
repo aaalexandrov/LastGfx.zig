@@ -38,8 +38,8 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
     if (windowsVulkanSDKPath) |path| {
-        translate_c.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include", .{path}) catch @panic("OOM") });
-        translate_c.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include/vma", .{path}) catch @panic("OOM") });
+        translate_c.addIncludePath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}/include", .{path}) });
+        translate_c.addIncludePath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}/include/vma", .{path}) });
     }
     exe_mod.addImport("c", translate_c.createModule());
 
@@ -62,9 +62,9 @@ pub fn build(b: *std.Build) !void {
     exe_mod.link_libcpp = true;
 
     if (windowsVulkanSDKPath) |path| {
-        exe_mod.addLibraryPath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/lib", .{path}) catch @panic("OOM") });
-        exe_mod.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include", .{path}) catch @panic("OOM") });
-        exe_mod.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include/vma", .{path}) catch @panic("OOM") });
+        exe_mod.addLibraryPath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}/lib", .{path}) });
+        exe_mod.addIncludePath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}/include", .{path}) });
+        exe_mod.addIncludePath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}/include/vma", .{path}) });
     }
     const vk_lib_name = if (target.result.os.tag == .windows) "vulkan-1" else "vulkan";
     exe_mod.linkSystemLibrary(vk_lib_name, .{});

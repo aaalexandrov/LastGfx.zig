@@ -1,0 +1,48 @@
+#version 450
+#extension GL_EXT_mesh_shader : require
+
+#include "flat.glsli"
+
+layout (location = 0) out vec3 normals[];
+layout (location = 1) out vec3 worldPositions[];
+
+#define WORKGROUP_SIZE 32
+
+layout(local_size_x = WORKGROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
+layout(triangles, max_vertices = WORKGROUP_SIZE*3, max_primitives = WORKGROUP_SIZE) out;
+
+void main()
+{
+    uint triIndex = gl_GlobalInvocationID.x;
+    uint numTriangles = pushData.inputData.data.numTriangles;
+    if (triIndex >= numTriangles)
+        return;
+    
+    uint baseTri = gl_WorkGroupID.x * WORKGROUP_SIZE;
+    uint workgroupTris = min(WORKGROUP_SIZE, numTriangles - baseTri);
+    SetMeshOutputsEXT(3 * workgroupTris, workgroupTris);
+
+    PositionData meshPositions = pushData.inputData.data.meshPositions;
+    IndexData meshTriangles = pushData.inputData.data.meshTriangles;
+
+    mat4 world = pushData.inputData.data.world;
+    mat4 viewProj = pushData.inputData.data.proj * pushData.inputData.data.view;
+
+    vec3 pos[3];
+
+    uint baseVertex = (triIndex - baseTri) * 3;
+
+    for (uint i = 0; i < 3; ++i) {
+        vec3 modelPos = meshPositions.positions[meshTriangles.indices[triIndex*3+i]];
+        pos[i] = (world * vec4(modelPos, 1)).xyz;
+        gl_MeshVerticesEXT[baseVertex + i].gl_Position = viewProj * vec4(pos[i], 1);
+        worldPositions[baseVertex + i] = pos[i];
+    }
+
+    vec3 normal = normalize(cross(pos[2] - pos[0], pos[1] - pos[0]));
+    for (uint i = 0; i < 3; ++i) {
+        normals[baseVertex + i] = normal;
+    }
+
+    gl_PrimitiveTriangleIndicesEXT[triIndex - baseTri] = uvec3(baseVertex + 0, baseVertex + 1, baseVertex + 2);
+}

@@ -1,7 +1,7 @@
 const std = @import("std");
 const c = @import("c");
-const vk = @import("vk_gfx.zig");
-const descr = @import("descriptors.zig");
+const vk = @import("../vk_gfx.zig");
+const descr = @import("../descriptors.zig");
 
 fn ListNode(List: type, T: type) type {
     return struct {

@@ -331,8 +331,12 @@ pub fn Mat(comptime R: u32, comptime C: u32, comptime T: type) type {
             var res: Simd = undefined;
             inline for (0..C) |c| {
                 res[c] = Col.cardinal(c, 1);
-                if (c < PosVec.Dim)
-                    res[c][R-1] = PosVec.get(pos, c);
+            }
+            inline for (0..R) |r| {
+                res[C-1][r] = if (r < @min(R, PosVec.Dim))
+                        PosVec.get(pos, r)
+                    else
+                        @intFromBool(r == R-1);
             }
             return res;
         }

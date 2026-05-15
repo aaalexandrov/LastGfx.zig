@@ -1,6 +1,6 @@
 const std = @import("std");
 const c = @import("c");
-const vk = @import("vk_gfx.zig");
+const vk = @import("../vk_gfx.zig");
 const r = @import("renderer.zig");
 
 image: vk.Image,
