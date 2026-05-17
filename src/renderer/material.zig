@@ -8,5 +8,5 @@ pub const Properties = struct {
     metallic: f32 = 0.1,
 };
 
-pipeline: *const vk.Pipeline = null,
+pipeline: r.RcPipeline = .{},
 properties: Properties = .{},

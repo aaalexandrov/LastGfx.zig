@@ -1,7 +1,14 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-fn emptyDeinit(_: anytype, _: std.mem.Allocator) void {}
+pub fn emptyDeinit(_: anytype, _: std.mem.Allocator) void {}
+pub fn simpleDeinit(comptime T: type) fn (data: *T, _: std.mem.Allocator) void {
+    return struct {
+        fn simple(data: *T, _: std.mem.Allocator) void {
+            data.deinit();
+        }
+    }.simple;
+}
 
 fn RcInner(T: type, deinitFn: anytype) type {
     return struct {
@@ -144,7 +151,6 @@ pub fn WeakPtr(T: type, deinitFn: anytype) type {
 pub fn WeakPtrNoDeinit(T: type) type {
     return RcPtr(T, true, emptyDeinit);
 }
-
 
 pub fn RcTest(alloc: std.mem.Allocator) !void {
     const expect = std.testing.expect;

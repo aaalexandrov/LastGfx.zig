@@ -11,11 +11,7 @@ pub const PipelineInfo = struct {
     },
 };
 
-pub const RcPipeline = rc.SharedPtr(vk.Pipeline, struct { 
-        fn deinit(pipeline: *vk.Pipeline, _: std.mem.Allocator) void {
-            pipeline.deinit();
-        }
-    }.deinit);
+pub const RcPipeline = rc.SharedPtr(vk.Pipeline, rc.simpleDeinit(vk.Pipeline));
 
 pub const PipelineCache = std.array_hash_map.ArrayHashMap(
     PipelineInfo, 
@@ -51,7 +47,8 @@ pub fn getPipeline(self: *Self, info: *const PipelineInfo) !RcPipeline {
         res.assign(cacheRes.value_ptr, self.gfx.alloc);
     if (res.data() == null) {
         try res.allocate(self.gfx.alloc, try self.loadPipeline(info));
-        cacheRes.value_ptr.* = .{};
+        if (!cacheRes.found_existing)
+            cacheRes.value_ptr.* = .{};
         cacheRes.value_ptr.assign(&res, self.gfx.alloc);
     }
     return res;
