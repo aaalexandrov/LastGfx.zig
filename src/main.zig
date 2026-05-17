@@ -15,14 +15,17 @@ pub fn main(init: std.process.Init) !void {
     try Font.initStatic(&rend, "shaders/font", rend.gfx.swapchainFormat);
     defer Font.deinitStatic(&rend);
 
-    var pipeline = try rend.loadGraphicsPipeline("shaders/triangle", &.{
-        .colorAttachments = @constCast(&[_]vk.Pipeline.GraphicsState.ColorAttachment{
-            .{
-                .format = rend.gfx.swapchainFormat,
-            }
-        })
+    var pipeline = try rend.pipelines.getPipeline(&.{
+        .name = "shaders/triangle", 
+        .data = .{.graphics = .{
+            .colorAttachments = @constCast(&[_]vk.Pipeline.GraphicsState.ColorAttachment{
+                .{
+                    .format = rend.gfx.swapchainFormat,
+                }
+            })
+        }}
     });
-    defer pipeline.deinit(&rend.gfx);
+    defer pipeline.clear(rend.gfx.alloc);
 
 
     var buffer = try vk.Buffer.init(&rend.gfx, &.{
@@ -168,7 +171,7 @@ pub fn main(init: std.process.Init) !void {
 
             cmds.pushData(&buffer.deviceAddress);
 
-            cmds.bindRenderPipeline(&pipeline);
+            cmds.bindRenderPipeline(pipeline.data().?);
             cmds.drawMeshTasks(3, 1, 1);
 
             const pixelSize: [2]f32 = .{

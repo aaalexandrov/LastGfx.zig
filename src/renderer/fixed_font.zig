@@ -8,7 +8,7 @@ imageDescriptor: vk.HeapDescriptor,
 samplerDescriptor: vk.HeapDescriptor,
 name: []const u8,
 
-pub var pipeline: vk.Pipeline = undefined;
+pub var pipeline: r.RcPipeline = .{};
 
 pub const Self = @This();
 
@@ -76,18 +76,21 @@ pub fn deinit(self: *Self, renderer: *r.Renderer) !void {
 }
 
 pub fn initStatic(renderer: *r.Renderer, shaderPath: []const u8, attachmentFormat: c.VkFormat) !void {
-    pipeline = try renderer.loadGraphicsPipeline(shaderPath, &vk.Pipeline.GraphicsState{
-        .colorAttachments = @constCast(&[_]vk.Pipeline.GraphicsState.ColorAttachment{
-            .{
-                .format = attachmentFormat,
-                .blend = .srcAlpha,
-            },
-        }),
+    pipeline = try renderer.pipelines.getPipeline(&.{
+        .name = shaderPath, 
+        .data = .{.graphics = .{
+            .colorAttachments = @constCast(&[_]vk.Pipeline.GraphicsState.ColorAttachment{
+                .{
+                    .format = attachmentFormat,
+                    .blend = .srcAlpha,
+                },
+            }),
+        }}
     });
 }
 
 pub fn deinitStatic(renderer: *r.Renderer) void {
-    pipeline.deinit(&renderer.gfx);
+    pipeline.clear(renderer.gfx.alloc);
 }
 
 fn getCharLayer(self: *Self, ch: u8) u32 {
@@ -139,7 +142,7 @@ pub fn render(self: *Self, str: []const u8, startPos: [2]f32, pixelSize: [2]f32,
         pos[0] += quadSize[0];
     }
     
-    submit.cmds.bindRenderPipeline(&Self.pipeline);
+    submit.cmds.bindRenderPipeline(Self.pipeline.data().?);
 
     submit.cmds.pushData(&buffer.deviceAddress());
     submit.cmds.drawMeshTasks(@intCast((str.len + 31) / 32), 1, 1);

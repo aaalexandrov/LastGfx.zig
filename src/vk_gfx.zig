@@ -888,6 +888,7 @@ pub const Pipeline = struct {
     handle: c.VkPipeline = null,
     name: []const u8 = "",
     kind: Kind,
+    gfx: *Gfx,
 
     pub const Kind = enum {
         Graphics,
@@ -933,6 +934,7 @@ pub const Pipeline = struct {
     pub fn initGraphics(gfx: *Gfx, meshShader: *const Shader, fragShader: *const Shader, state: *const GraphicsState, name: []const u8) !Self {
         var self = Self{
             .kind = .Graphics,
+            .gfx = gfx,
         };
         var stages = [_]c.VkPipelineShaderStageCreateInfo{
             c.VkPipelineShaderStageCreateInfo{
@@ -1016,14 +1018,13 @@ pub const Pipeline = struct {
         return self;
     }
 
-    pub fn initCompute(gfx: *Gfx, compShader: *const Shader, name: [:0]const u8) !Self {
+    pub fn initCompute(gfx: *Gfx, compShader: *const Shader, name: []const u8) !Self {
         var self = Self{
             .kind = .Compute,
+            .gfx = gfx,
         };
         try check(c.vkCreateComputePipelines(gfx.device.handle, null, 1, &c.VkComputePipelineCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-            .flags = c.VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT,
-            .layout = gfx.pipelineLayout.handle,
             .stage = c.VkPipelineShaderStageCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                 .stage = c.VK_SHADER_STAGE_COMPUTE_BIT,
@@ -1035,13 +1036,13 @@ pub const Pipeline = struct {
                 .flags = c.VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT,
             }),
         }, gfx.allocCB, &self.handle));
-        self.name = try gfx.alloc.dupeZ(u8, name);
+        self.name = try gfx.alloc.dupe(u8, name);
         return self;
     }
 
-    pub fn deinit(self: *Self, gfx: *Gfx) void {
-        gfx.alloc.free(self.name);
-        c.vkDestroyPipeline(gfx.device.handle, self.handle, gfx.allocCB);
+    pub fn deinit(self: *Self) void {
+        self.gfx.alloc.free(self.name);
+        c.vkDestroyPipeline(self.gfx.device.handle, self.handle, self.gfx.allocCB);
     }
 };
 
@@ -1593,7 +1594,6 @@ pub const DescriptorHeap = struct {
     };
 
     const ByteArrayList = std.array_list.Aligned(u8, null);
-    const U64HashMap = std.array_hash_map.AutoArrayHashMapUnmanaged(u64, u64);
     const Self = @This();
 
     pub fn init(gfx: *Gfx, kind: Kind, numDescriptors: u32) !Self {

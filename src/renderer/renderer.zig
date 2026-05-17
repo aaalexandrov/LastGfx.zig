@@ -367,11 +367,15 @@ pub const Window = struct {
 
 const DescriptorHeapManaged = descr.DescriptorHeapManaged;
 
+const Pipelines = @import("pipelines.zig");
+pub const RcPipeline = Pipelines.RcPipeline;
+
 pub const Renderer = struct {
     gfx: vk.Gfx,
     resources: DescriptorHeapManaged,
     samplers: DescriptorHeapManaged,
     bufferPool: BufferPool,
+    pipelines: Pipelines,
 
     pub const Self = @This();
 
@@ -384,9 +388,11 @@ pub const Renderer = struct {
         try self.resources.init(&self.gfx, .Resource, numResourceDescriptors orelse @intCast(self.gfx.physical.maxResourceDescriptors()));
         try self.samplers.init(&self.gfx, .Sampler, numSamplerDescriptors orelse @intCast(self.gfx.physical.maxSamplerDescriptors()));
         self.bufferPool = BufferPool.init(&self.gfx);
+        try self.pipelines.init(&self.gfx);
     }
 
     pub fn deinit(self: *Self) void {
+        self.pipelines.deinit();
         self.bufferPool.deinit();
         self.samplers.deinit();
         self.resources.deinit();
@@ -411,36 +417,5 @@ pub const Renderer = struct {
     pub fn freeDescriptor(self: *Self, desc: vk.HeapDescriptor) !void {
         const heap = self.getHeapForDescriptorType(desc.type);
         try heap.freeDescriptor(desc);
-    }
-
-    pub fn loadGraphicsPipeline(self: *Self, path: []const u8, state: *const vk.Pipeline.GraphicsState) !vk.Pipeline {
-        var shaderMesh = mesh: {
-            const meshName = try std.mem.joinZ(self.gfx.alloc, "", &[_][]const u8{ path, ".mesh.spv" });
-            defer self.gfx.alloc.free(meshName);
-            break :mesh try vk.Shader.init(&self.gfx, meshName);
-        };
-        defer shaderMesh.deinit(&self.gfx);
-
-        var shaderFrag = frag: {
-            const fragName = try std.mem.joinZ(self.gfx.alloc, "", &[_][]const u8{ path, ".frag.spv" });
-            defer self.gfx.alloc.free(fragName);
-            break :frag try vk.Shader.init(&self.gfx, fragName);
-        };
-        defer shaderFrag.deinit(&self.gfx);
-
-        const pipeline = try vk.Pipeline.initGraphics(&self.gfx, &shaderMesh, &shaderFrag, state, path);
-        return pipeline;
-    }
-
-    pub fn loadComputePipeline(self: *Self, path: []const u8) !vk.Pipeline {
-        var shaderCompute = compute: {
-            const computeName = try std.mem.joinZ(self.gfx.alloc, "", &[_][]const u8{ path, ".comp.spv" });
-            defer self.gfx.alloc.free(computeName);
-            break :compute try vk.Shader.init(&self.gfx, computeName);
-        };
-        defer shaderCompute.deinit(&self.gfx);
-
-        const pipeline = try vk.Pipeline.initCompute(&self.gfx, &shaderCompute, path);
-        return pipeline;
     }
 };
