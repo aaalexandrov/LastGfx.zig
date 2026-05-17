@@ -1,7 +1,10 @@
 const std = @import("std");
+const rc = @import("../rc_ptr.zig");
 const r = @import("renderer.zig");
 const vk = @import("../vk_gfx.zig");
 const c = @import("c");
+
+pub const Rc = rc.SharedPtr(Self, rc.simpleDeinit(Self));
 
 vertexSize: u32,
 numVertices: u32,

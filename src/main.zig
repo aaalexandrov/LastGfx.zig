@@ -3,6 +3,7 @@ const c = @import("c");
 const vk = @import("vk_gfx.zig");
 const r = @import("renderer/renderer.zig");
 const Font = @import("renderer/fixed_font.zig");
+const Scene = @import("renderer/scene.zig");
 
 pub fn main(init: std.process.Init) !void {
     var rend : r.Renderer = undefined;
@@ -59,6 +60,10 @@ pub fn main(init: std.process.Init) !void {
 
     var font: Font = undefined;
     defer font.deinit(&rend) catch {};
+
+    var scene: Scene = undefined;
+    try scene.init(&rend);
+    defer scene.deinit();
 
     {
         var upload = try r.SubmitInfo.init(&rend, 1024 * 1024);
@@ -173,6 +178,8 @@ pub fn main(init: std.process.Init) !void {
 
             cmds.bindRenderPipeline(pipeline.data().?);
             cmds.drawMeshTasks(3, 1, 1);
+
+            try scene.render(submit);
 
             const pixelSize: [2]f32 = .{
                 1.0 / @as(f32, @floatFromInt(swapImage.desc.width)),
