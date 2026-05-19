@@ -14,6 +14,7 @@ pub const Object = @import("scene_object.zig");
 
 camera: Camera,
 light: Light,
+environmentColor: Vec3f.Simd,
 objects: std.array_list.Aligned(Object.Rc, null),
 renderer: *r.Renderer,
 
@@ -22,6 +23,7 @@ pub const Self = @This();
 pub fn init(self: *Self, rend: *r.Renderer) !void {
     self.camera = .{};
     self.light = .{};
+    self.environmentColor = .{0.4, 0.4, 0.4};
     self.objects = try std.array_list.Aligned(Object.Rc, null).initCapacity(rend.gfx.alloc, 16);
     self.renderer = rend;
 }
@@ -34,9 +36,9 @@ pub fn deinit(self: *Self) void {
 
 pub fn render(self: *Self, submit: *r.SubmitInfo) !void {
     for (self.objects.items) |*obj|
-        try obj.data().?.render(submit);
+        try obj.data().?.render(self, submit);
 }
 
-fn alloc(self: *Self) std.mem.Allocator {
+pub fn alloc(self: *Self) std.mem.Allocator {
     return self.renderer.gfx.alloc;
 }

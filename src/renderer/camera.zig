@@ -17,8 +17,8 @@ pub fn getPos(self: *Self) Vec4f.Simd {
     return Mat4f.row(self.transform, 3);
 }
 
-pub fn getViewMatrix(self: *Self) Mat4f.Simd {
-    return Mat4f.inverse(self.transform);
+pub fn getViewMatrix(self: *Self) !Mat4f.Simd {
+    return try Mat4f.inverse(self.transform);
 }
 
 pub fn getProjectionMatrix(self: *Self) Mat4f.Simd {

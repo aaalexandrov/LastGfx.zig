@@ -212,3 +212,24 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
+fn initScene(scene: *Scene, upload: *r.SubmitInfo) !void {
+    _ = upload;
+
+    var pipelineFlat = try scene.renderer.pipelines.getPipeline(&.{
+        .name = "shaders/flat", 
+        .data = .{.graphics = .{
+            .colorAttachments = @constCast(&[_]vk.Pipeline.GraphicsState.ColorAttachment{
+                .{
+                    .format = scene.renderer.gfx.swapchainFormat,
+                }
+            })
+        }}
+    });
+    defer pipelineFlat.clear(scene.alloc());
+
+    const Material = @import("renderer/material.zig");
+    var materialFlat = try Material.Rc.allocate(scene.alloc(), .{});
+    defer materialFlat.clear(scene.alloc());
+
+    materialFlat.data().?.pipeline.assign(pipelineFlat, scene.alloc());
+}
