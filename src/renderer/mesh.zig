@@ -18,8 +18,9 @@ pub fn init(gfx: *vk.Gfx, vertexSize: u32, numVertices: u32, numIndices: u32) !S
         .vertexSize = vertexSize,
         .numVertices = numVertices,
         .numIndices = numIndices,
+        .buffer = undefined,
     };
-    self.buffer = try vk.Buffer.init(gfx, .{
+    self.buffer = try vk.Buffer.init(gfx, &.{
         .size = self.getIndicesSize() + self.getVerticesSize(), 
         .usage = .{.transferDst = true, .storageRead = true}
     });
@@ -28,18 +29,18 @@ pub fn init(gfx: *vk.Gfx, vertexSize: u32, numVertices: u32, numIndices: u32) !S
 
 pub fn initData(submit: *r.SubmitInfo, vertexSize: u32, vertexData: []const u8, indices: [] const u32) !Self {
     std.debug.assert(vertexData.len % vertexSize == 0);
-    const self = try init(submit.renderer.gfx, vertexSize, @intCast(vertexData.len / vertexSize), @intCast(indices.len));
+    var self = try init(&submit.renderer.gfx, vertexSize, @intCast(vertexData.len / vertexSize), @intCast(indices.len));
 
     const staging = try submit.staging.alloc(self.buffer.desc.size, self.buffer.desc.alignment);
     const stagingMem = staging.slice();
-    @memcpy(stagingMem[self.getIndicesOffset()..][0..self.getIndicesSize()], indices);
+    @memcpy(stagingMem[self.getIndicesOffset()..][0..self.getIndicesSize()], std.mem.sliceAsBytes(indices));
     @memcpy(stagingMem[self.getVerticesOffset()..][0..self.getVerticesSize()], vertexData);
 
     submit.cmds.copyBuffer(staging.buffer, &self.buffer, &[_]c.VkBufferCopy2{
         .{
             .sType = c.VK_STRUCTURE_TYPE_BUFFER_COPY_2,
-            .srcOffs = staging.offset,
-            .dstOffs = 0,
+            .srcOffset = staging.offset,
+            .dstOffset = 0,
             .size = self.buffer.desc.size,
         },
     });

@@ -99,6 +99,8 @@ pub fn main(init: std.process.Init) !void {
             },
         });
 
+        try initScene(&scene, &upload);
+
         try upload.cmds.end();
         try upload.cmds.submit(null);
         try upload.cmds.waitFinished();
@@ -213,8 +215,6 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn initScene(scene: *Scene, upload: *r.SubmitInfo) !void {
-    _ = upload;
-
     var pipelineFlat = try scene.renderer.pipelines.getPipeline(&.{
         .name = "shaders/flat", 
         .data = .{.graphics = .{
@@ -228,8 +228,53 @@ fn initScene(scene: *Scene, upload: *r.SubmitInfo) !void {
     defer pipelineFlat.clear(scene.alloc());
 
     const Material = @import("renderer/material.zig");
-    var materialFlat = try Material.Rc.allocate(scene.alloc(), .{});
+    var materialFlat: Material.Rc = .{};
+    try materialFlat.allocate(scene.alloc(), .{});
     defer materialFlat.clear(scene.alloc());
 
-    materialFlat.data().?.pipeline.assign(pipelineFlat, scene.alloc());
+    materialFlat.data().?.pipeline.assign(&pipelineFlat, scene.alloc());
+
+    const cubeVerts: [8][3]f32 = .{
+        .{-1, -1, -1},
+        .{-1, -1,  1},
+        .{-1,  1, -1},
+        .{-1,  1,  1},
+        .{ 1, -1, -1},
+        .{ 1, -1,  1},
+        .{ 1,  1, -1},
+        .{ 1,  1,  1},
+    };
+
+    const cubeIndices: [6*2*3]u32 = .{
+        0, 1, 2,
+        2, 1, 3,
+        5, 4, 6,
+        5, 6, 7,
+        0, 2, 4,
+        4, 2, 6,
+        3, 1, 5,
+        3, 5, 7,
+        0, 1, 4,
+        4, 1, 5,
+        3, 2, 6,
+        3, 6, 7,
+    };
+
+    const Mesh = @import("renderer/mesh.zig");
+    var meshCube: Mesh.Rc = .{};
+    try meshCube.allocate(scene.alloc(), try Mesh.initData(upload, 3*@sizeOf(f32), @ptrCast(&cubeVerts), &cubeIndices));
+    defer meshCube.clear(scene.alloc());
+
+    var cubeObj: Scene.Object.Rc = .{};
+    try cubeObj.allocate(scene.alloc(), .{});
+    defer cubeObj.clear(scene.alloc());
+
+    const cube = cubeObj.data().?;
+    cube.material.assign(&materialFlat, scene.alloc());
+    cube.mesh.assign(&meshCube, scene.alloc());
+
+    try scene.objects.append(scene.alloc(), .{});
+    scene.objects.items[scene.objects.items.len - 1].assign(&cubeObj, scene.alloc());
+
+    scene.camera.translate(Scene.Vec3f.Simd{0, 0, -5});
 }

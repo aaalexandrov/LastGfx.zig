@@ -43,6 +43,7 @@ pub fn init(self: *@This()) void {
 
 pub fn deinit(self: *@This(), alloc_: std.mem.Allocator) void {
     self.material.clear(alloc_);
+    self.mesh.clear(alloc_);
 }
 
 pub fn render(self: *Self, scene: *Scene, submit: *r.SubmitInfo) !void {

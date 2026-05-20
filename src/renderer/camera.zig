@@ -27,7 +27,7 @@ pub fn getProjectionMatrix(self: *Self) Mat4f.Simd {
 
 pub fn translate(self: *Self, delta: Vec3f.Simd) void {
     const vec = Mat4f.mulMatVec(self.transform, Vec3f.toDim(4, delta, 0));
-    self.translate[3] += vec;
+    self.transform[3] += vec;
 }
 
 pub fn rotate(self: *Self, angles: Vec3f.Simd) void {
