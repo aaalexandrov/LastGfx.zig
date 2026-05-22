@@ -121,7 +121,7 @@ pub fn render(self: *Self, str: []const u8, startPos: [2]f32, pixelSize: [2]f32,
     };
 
     const buffer = try submit.staging.alloc(@sizeOf(BufferData) + @sizeOf(CharData) * str.len, 16);
-    const bufferData: [*]BufferData = @ptrCast(@alignCast(buffer.buffer.hostAddress.?));
+    const bufferData: [*]BufferData = @ptrCast(@alignCast(buffer.buffer.hostAddress.? + buffer.offset));
     bufferData[0].inColor = color;
     bufferData[0].texIndex = self.imageDescriptor.index;
     bufferData[0].samplerIndex = self.samplerDescriptor.index;
