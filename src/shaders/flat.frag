@@ -1,6 +1,6 @@
 #version 450
 
-#include "flat.glsli"
+#include "flat.glsl"
 
 layout (location = 0) in vec3 normal;
 layout (location = 1) in vec3 worldPosition;

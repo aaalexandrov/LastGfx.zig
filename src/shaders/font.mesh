@@ -1,7 +1,7 @@
 #version 450
 #extension GL_EXT_mesh_shader : require
 
-#include "font.glsli"
+#include "font.glsl"
 
 layout (location = 0) out vec3 uvlayer[];
 

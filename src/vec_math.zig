@@ -318,9 +318,9 @@ pub fn Mat(comptime R: u32, comptime C: u32, comptime T: type) type {
                     const elem = Col.get(m[co], c);
                     if (std.math.approxEqAbs(T, elem, 0, Eps))
                         continue;
-                    const factor = @as(Col.Simd, @splat(-pivot / elem));
-                    m[co] = m[co] * factor + m[c];
-                    res[co] = res[co] * factor + res[c];
+                    const factor = @as(Col.Simd, @splat(elem));
+                    m[co] -= m[c] * factor;
+                    res[co] -= res[c] * factor;
                 }
             }
             return res;
@@ -372,18 +372,18 @@ pub fn Mat(comptime R: u32, comptime C: u32, comptime T: type) type {
             return Simd{
                 .{1/(aspect*tanFov2), 0, 0, 0},
                 .{0, 1/tanFov2, 0, 0},
-                .{0, 0, -(far+near)/(far-near), -2*far*near/(far-near)},
-                .{0, 0, -1, 0},
+                .{0, 0, -(far+near)/(far-near), -1},
+                .{0, 0, -2*far*near/(far-near), 0},
             };
         }
 
         pub fn orthographic(left: T, right: T, bottom: T, top: T, near: T, far: T) Simd {
             comptime if (C != 4 or R != 4) unreachable;
             return Simd{
-                .{2/(right-left), 0, 0, -(right+left)/(right-left)},
-                .{0, 2/(top-bottom), 0, -(top+bottom)/(top-bottom)},
-                .{0, 0, -2/(far-near), -(far+near)/(far-near)},
-                .{0, 0, 0, 1},
+                .{2/(right-left), 0, 0, 0},
+                .{0, 2/(top-bottom), 0, 0},
+                .{0, 0, -2/(far-near), 0},
+                .{-(right+left)/(right-left), -(top+bottom)/(top-bottom), -(far+near)/(far-near), 1},
             };
         }
     };

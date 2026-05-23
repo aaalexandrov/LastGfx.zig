@@ -202,6 +202,10 @@ pub fn main(init: std.process.Init) !void {
             frames += 1;
         } else {
             try window.swapchain.recreate();
+            if (window.swapchain.isValid()) {
+                const desc = &window.swapchain.images[0].desc;
+                scene.camera.aspect = @as(f32, @floatFromInt(desc.width)) / @as(f32, @floatFromInt(desc.height));
+            }
 
             for (commands.items) |*cmd|
                 try cmd.deinit();
@@ -276,5 +280,5 @@ fn initScene(scene: *Scene, upload: *r.SubmitInfo) !void {
     try scene.objects.append(scene.alloc(), .{});
     scene.objects.items[scene.objects.items.len - 1].assign(&cubeObj, scene.alloc());
 
-    scene.camera.translate(Scene.Vec3f.Simd{0, 0, -5});
+    scene.camera.translate(Scene.Vec3f.Simd{0, 0, 5});
 }

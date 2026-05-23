@@ -9,7 +9,7 @@ transform: Mat4f.Simd = Mat4f.diag(1),
 fovY: f32 = std.math.degreesToRadians(60),
 aspect: f32 = 1,
 nearZ: f32 = 0.1,
-farZ: f32 = 1e1000,
+farZ: f32 = 1e3,
 
 pub const Self = @This();
 
