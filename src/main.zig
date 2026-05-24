@@ -28,7 +28,6 @@ pub fn main(init: std.process.Init) !void {
     });
     defer pipeline.clear(rend.gfx.alloc);
 
-
     var buffer = try vk.Buffer.init(&rend.gfx, &.{
         .size = 1024,
         .usage = vk.Usage{.storageRead = true, .hostWrite = true},
@@ -222,6 +221,10 @@ fn initScene(scene: *Scene, upload: *r.SubmitInfo) !void {
     var pipelineFlat = try scene.renderer.pipelines.getPipeline(&.{
         .name = "shaders/flat", 
         .data = .{.graphics = .{
+            .cullMode = c.VK_CULL_MODE_BACK_BIT,
+            .depthWrite = true,
+            .depthCompareOp = c.VK_COMPARE_OP_LESS,
+            .depthAttachmentFormat = c.VK_FORMAT_D32_SFLOAT,
             .colorAttachments = @constCast(&[_]vk.Pipeline.GraphicsState.ColorAttachment{
                 .{
                     .format = scene.renderer.gfx.swapchainFormat,
