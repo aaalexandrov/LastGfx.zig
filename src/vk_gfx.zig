@@ -187,6 +187,7 @@ pub const Gfx = struct {
             c.VK_EXT_MESH_SHADER_EXTENSION_NAME,
             c.VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME,
             c.VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME,
+            c.VK_EXT_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_EXTENSION_NAME,
         };
 
     fn createDevice(self: *Self) !Device {
@@ -218,12 +219,16 @@ pub const Gfx = struct {
                                     .pNext = @constCast(&c.VkPhysicalDeviceDescriptorHeapFeaturesEXT{
                                         .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT,
                                         .descriptorHeap = c.VK_TRUE,
+                                        .pNext = @constCast(&c.VkPhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT{
+                                            .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_FEATURES_EXT,
+                                            .dynamicRenderingUnusedAttachments = c.VK_TRUE,
                                         }),
                                     }),
                                 }),
                             }),
                         }),
                     }),
+                }),
             .queueCreateInfoCount = 1,
             .pQueueCreateInfos = &c.VkDeviceQueueCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -497,8 +502,12 @@ pub const Commands = struct {
         }
 
         var depthAttachment: c.VkRenderingAttachmentInfo = undefined;
+        var hasDepthAttachment = false;
+        var hasStencilAttachment = false; 
         if (depthStencilTarget) |depthStencil| {
             depthAttachment = depthStencil.attachment();
+            hasDepthAttachment = isDepthStencilFormat(depthStencil.image.desc.format);
+            hasStencilAttachment = isStencilFormat(depthStencil.image.desc.format);
         }
 
         c.vkCmdBeginRendering(self.handle, &c.VkRenderingInfo{
@@ -507,8 +516,8 @@ pub const Commands = struct {
             .renderArea = c.VkRect2D{ .extent = colorTargets[0].image.desc.extent2D() },
             .colorAttachmentCount = @intCast(colorAttachments.items.len),
             .pColorAttachments = colorAttachments.items.ptr,
-            .pDepthAttachment = if (depthStencilTarget) |_| &depthAttachment else null,
-            .pStencilAttachment = if (depthStencilTarget) |_| &depthAttachment else null,
+            .pDepthAttachment = if (hasDepthAttachment) &depthAttachment else null,
+            .pStencilAttachment = if (hasStencilAttachment) &depthAttachment else null,
         });
     }
 
@@ -1244,7 +1253,7 @@ pub const Image = struct {
     allocation: c.VmaAllocation = null,
     view: c.VkImageView = null,
     hostAddress: ?[*]u8 = null,
-    desc: Descriptor,
+    desc: Descriptor = .{},
     gfx: *Gfx,
 
     pub const Descriptor = struct {
@@ -1305,7 +1314,7 @@ pub const Image = struct {
                         c.VK_IMAGE_TILING_OPTIMAL,
                 .usage = usageFlags(desc.usage, desc.format),
                 .sharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
-                .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+                .initialLayout = initialLayout(desc.usage),
             },
             &c.VmaAllocationCreateInfo{
                 .flags = getVmaAllocationCreateFlags(desc.usage),
@@ -1408,6 +1417,14 @@ pub const Image = struct {
                     c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         return imgUsage;
     }
+
+    fn initialLayout(usage: Usage) c.VkImageLayout {
+        return 
+            if (usage.hostWrite)
+                c.VK_IMAGE_LAYOUT_PREINITIALIZED
+            else
+                c.VK_IMAGE_LAYOUT_UNDEFINED;
+    }   
 
     fn imageAspect(format: c.VkFormat) c.VkImageAspectFlags {
         return 

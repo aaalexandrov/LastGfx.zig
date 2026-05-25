@@ -50,16 +50,6 @@ pub fn render(self: *Self, scene: *Scene, submit: *r.SubmitInfo) !void {
     const staging = try submit.staging.alloc(@sizeOf(BufferData), @alignOf(BufferData));
     const data: *BufferData = @ptrCast(@alignCast(staging.slice()));
 
-    const projMat = scene.camera.getProjectionMatrix();
-    const viewMat = try scene.camera.getViewMatrix();
-    var vm: [4][4]f32 = undefined;
-    for (0..4) |i| {
-        vm[i] = viewMat[i];
-    }
-    const viewed = Mat4f.mulMatVec(viewMat, Vec4f.Simd{1, 1, 1, 1});
-    var projected = Mat4f.mulMatVec(projMat, viewed);
-    projected /= @as(Vec4f.Simd, @splat(projected[3]));
-
     data.world = self.transform;
     data.view = try scene.camera.getViewMatrix();
     data.proj = scene.camera.getProjectionMatrix();

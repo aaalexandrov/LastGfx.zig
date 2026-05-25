@@ -13,6 +13,11 @@ pub fn main(init: std.process.Init) !void {
     var window = try r.Window.init(&rend, "LastGfx", 400, 300, c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_VULKAN);
     defer window.deinit() catch {};
 
+    var depthBuffer: vk.Image = .{ .gfx = &rend.gfx, };
+    defer if (depthBuffer.handle != null)
+        depthBuffer.deinit();
+    var depthBufferNeedsTransition = false;
+
     try Font.initStatic(&rend, "shaders/font", rend.gfx.swapchainFormat);
     defer Font.deinitStatic(&rend);
 
@@ -159,10 +164,18 @@ pub fn main(init: std.process.Init) !void {
 
             cmds.imageBarrier(swapImage, .{}, .Graphics, .{.attachmentWrite = true}, .Graphics);
 
+            if (depthBufferNeedsTransition) {
+                cmds.imageBarrier(&depthBuffer, .{}, .Graphics, .{ .attachmentWrite = true }, .Graphics);
+                depthBufferNeedsTransition = false;
+            }
+
             const clearValue = c.VkClearColorValue{
                 .float32 = .{ 0, 0, 1, 1 },
             };
-            try cmds.renderBegin(&[_]vk.RenderTarget{.{ .image = swapImage, .clearValue = c.VkClearValue{ .color = clearValue } }}, null);
+            try cmds.renderBegin(
+                &[_]vk.RenderTarget{.{ .image = swapImage, .clearValue = c.VkClearValue{ .color = clearValue } }}, 
+                .{.image = &depthBuffer, .clearValue = .{.depthStencil = .{ .depth = 1e100 }}}
+            );
 
             const viewRect = c.VkRect2D{ .extent = swapImage.desc.extent2D() };
             cmds.setViewport(&c.VkViewport{
@@ -200,10 +213,19 @@ pub fn main(init: std.process.Init) !void {
 
             frames += 1;
         } else {
+            if (depthBuffer.handle != null)
+                depthBuffer.deinit();
             try window.swapchain.recreate();
             if (window.swapchain.isValid()) {
                 const desc = &window.swapchain.images[0].desc;
                 scene.camera.aspect = @as(f32, @floatFromInt(desc.width)) / @as(f32, @floatFromInt(desc.height));
+                depthBuffer = try vk.Image.init(&rend.gfx, &.{
+                    .width = desc.width, 
+                    .height = desc.height, 
+                    .format = c.VK_FORMAT_D32_SFLOAT,
+                    .usage = .{.attachmentRead = true, .attachmentWrite = true,},
+                });
+                depthBufferNeedsTransition = true;
             }
 
             for (commands.items) |*cmd|
