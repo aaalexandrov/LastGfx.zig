@@ -6,14 +6,16 @@ const Font = @import("renderer/fixed_font.zig");
 const Scene = @import("renderer/scene.zig");
 
 pub fn main(init: std.process.Init) !void {
-    var rend : r.Renderer = undefined;
+    var rend: r.Renderer = undefined;
     try rend.init(init.gpa, init.io, std.debug.runtime_safety, 1024, 256);
     defer rend.deinit();
 
     var window = try r.Window.init(&rend, "LastGfx", 400, 300, c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_VULKAN);
     defer window.deinit() catch {};
 
-    var depthBuffer: vk.Image = .{ .gfx = &rend.gfx, };
+    var depthBuffer: vk.Image = .{
+        .gfx = &rend.gfx,
+    };
     defer if (depthBuffer.handle != null)
         depthBuffer.deinit();
     var depthBufferNeedsTransition = false;
@@ -21,21 +23,14 @@ pub fn main(init: std.process.Init) !void {
     try Font.initStatic(&rend, "shaders/font", rend.gfx.swapchainFormat);
     defer Font.deinitStatic(&rend);
 
-    var pipeline = try rend.pipelines.getPipeline(&.{
-        .name = "shaders/triangle", 
-        .data = .{.graphics = .{
-            .colorAttachments = @constCast(&[_]vk.Pipeline.GraphicsState.ColorAttachment{
-                .{
-                    .format = rend.gfx.swapchainFormat,
-                }
-            })
-        }}
-    });
+    var pipeline = try rend.pipelines.getPipeline(&.{ .name = "shaders/triangle", .data = .{ .graphics = .{ .colorAttachments = @constCast(&[_]vk.Pipeline.GraphicsState.ColorAttachment{.{
+        .format = rend.gfx.swapchainFormat,
+    }}) } } });
     defer pipeline.clear(rend.gfx.alloc);
 
     var buffer = try vk.Buffer.init(&rend.gfx, &.{
         .size = 1024,
-        .usage = vk.Usage{.storageRead = true, .hostWrite = true},
+        .usage = vk.Usage{ .storageRead = true, .hostWrite = true },
     });
     defer buffer.deinit();
 
@@ -46,16 +41,16 @@ pub fn main(init: std.process.Init) !void {
     });
     defer image.deinit();
 
-    const linearSamplerDescriptor = try rend.setDescriptor(&.{.sampler=.{}});
+    const linearSamplerDescriptor = try rend.setDescriptor(&.{ .sampler = .{} });
 
-    const imageDescriptor = try rend.setDescriptor(&.{.image = .{.obj = &image}});
+    const imageDescriptor = try rend.setDescriptor(&.{ .image = .{ .obj = &image } });
 
     const InputBuffer = extern struct {
         color: [4]f32,
         texIndex: u32,
         samplerIndex: u32,
     };
-    const bufContent = InputBuffer {
+    const bufContent = InputBuffer{
         .color = .{ 1, 0.5, 0.0, 1 },
         .texIndex = imageDescriptor.index,
         .samplerIndex = linearSamplerDescriptor.index,
@@ -79,14 +74,14 @@ pub fn main(init: std.process.Init) !void {
 
         try upload.uploadDescriptors(&upload.cmds);
 
-        upload.cmds.imageBarrier(&image, .{}, .Graphics, .{.transferDst = true}, .Graphics);
+        upload.cmds.imageBarrier(&image, .{}, .Graphics, .{ .transferDst = true }, .Graphics);
 
         const pixelsUpload = try upload.staging.alloc(@intCast(image.desc.width * image.desc.height * 4), 1);
         var pixel: [*]u8 = pixelsUpload.buffer.hostAddress.? + pixelsUpload.offset;
         for (0..@intCast(image.desc.height)) |y| {
             for (0..@intCast(image.desc.width)) |x| {
                 const val: u8 = @intCast((y / 8 + x / 8) % 2 * 255);
-                @memcpy(pixel[0..4], &[4]u8{val, 0, val, 1});
+                @memcpy(pixel[0..4], &[4]u8{ val, 0, val, 1 });
                 pixel = pixel + 4;
             }
         }
@@ -114,13 +109,13 @@ pub fn main(init: std.process.Init) !void {
     var frames: i64 = 0;
     defer {
         const elapsed: f64 = @as(f64, @floatFromInt(timeStart.untilNow(init.io, .real).toMilliseconds())) / @as(f64, @floatFromInt(std.time.ms_per_s));
-        std.log.info("Frames: {}, seconds: {d:1.3}, average FPS: {d:1.3}", .{frames, elapsed, @as(f64, @floatFromInt(frames)) / elapsed});
+        std.log.info("Frames: {}, seconds: {d:1.3}, average FPS: {d:1.3}", .{ frames, elapsed, @as(f64, @floatFromInt(frames)) / elapsed });
     }
 
     var commands = try std.ArrayList(r.SubmitInfo).initCapacity(rend.gfx.alloc, 8);
     var commandsIndex: u8 = 0;
     defer {
-        for (commands.items) |*cmds| 
+        for (commands.items) |*cmds|
             cmds.deinit() catch {};
         commands.deinit(rend.gfx.alloc);
     }
@@ -133,30 +128,29 @@ pub fn main(init: std.process.Init) !void {
         while (c.SDL_PollEvent(&event)) {
             switch (event.type) {
                 c.SDL_EVENT_QUIT => running = false,
-                c.SDL_EVENT_KEY_DOWN => 
-                    switch (event.key.key) {
-                        c.SDLK_V => {
-                            window.swapchain.setPresentModeIndex((window.swapchain.presentModeIndex + 1) % @as(u8, @intCast(window.swapchain.presentModes.len)));
-                            std.log.info("Present mode {} of {}", .{window.swapchain.presentModeIndex + 1, window.swapchain.presentModes.len});
-                        },
-                        c.SDLK_I => {
-                            window.swapchain.setNumImages(window.swapchain.numImages % window.swapchain.maxNumImages + 1);
-                            std.log.info("Attempting to set number of swapchain images to {} of {} max", .{window.swapchain.numImages, window.swapchain.maxNumImages});
-                        },
-                        c.SDLK_W => scene.camera.translate(.{0, 0, -transDelta}),
-                        c.SDLK_S => scene.camera.translate(.{0, 0, transDelta}),
-                        c.SDLK_A => scene.camera.translate(.{-transDelta, 0, 0}),
-                        c.SDLK_D => scene.camera.translate(.{transDelta, 0, 0}),
-                        c.SDLK_R => scene.camera.translate(.{0, transDelta, 0}),
-                        c.SDLK_F => scene.camera.translate(.{0, -transDelta, 0}),
-                        c.SDLK_T => scene.camera.rotate(.{rotDelta, 0, 0}),
-                        c.SDLK_G => scene.camera.rotate(.{-rotDelta, 0, 0}),
-                        c.SDLK_Q => scene.camera.rotate(.{0, 0, -rotDelta}),
-                        c.SDLK_E => scene.camera.rotate(.{0, 0, rotDelta}),
-                        c.SDLK_Z => scene.camera.rotate(.{0, rotDelta, 0}),
-                        c.SDLK_C => scene.camera.rotate(.{0, -rotDelta, 0}),
-                        else => {},
+                c.SDL_EVENT_KEY_DOWN => switch (event.key.key) {
+                    c.SDLK_V => {
+                        window.swapchain.setPresentModeIndex((window.swapchain.presentModeIndex + 1) % @as(u8, @intCast(window.swapchain.presentModes.len)));
+                        std.log.info("Present mode {} of {}", .{ window.swapchain.presentModeIndex + 1, window.swapchain.presentModes.len });
                     },
+                    c.SDLK_I => {
+                        window.swapchain.setNumImages(window.swapchain.numImages % window.swapchain.maxNumImages + 1);
+                        std.log.info("Attempting to set number of swapchain images to {} of {} max", .{ window.swapchain.numImages, window.swapchain.maxNumImages });
+                    },
+                    c.SDLK_W => scene.camera.translate(.{ 0, 0, -transDelta }),
+                    c.SDLK_S => scene.camera.translate(.{ 0, 0, transDelta }),
+                    c.SDLK_A => scene.camera.translate(.{ -transDelta, 0, 0 }),
+                    c.SDLK_D => scene.camera.translate(.{ transDelta, 0, 0 }),
+                    c.SDLK_R => scene.camera.translate(.{ 0, transDelta, 0 }),
+                    c.SDLK_F => scene.camera.translate(.{ 0, -transDelta, 0 }),
+                    c.SDLK_T => scene.camera.rotate(.{ rotDelta, 0, 0 }),
+                    c.SDLK_G => scene.camera.rotate(.{ -rotDelta, 0, 0 }),
+                    c.SDLK_Z => scene.camera.rotate(.{ 0, 0, -rotDelta }),
+                    c.SDLK_C => scene.camera.rotate(.{ 0, 0, rotDelta }),
+                    c.SDLK_Q => scene.camera.rotate(.{ 0, rotDelta, 0 }),
+                    c.SDLK_E => scene.camera.rotate(.{ 0, -rotDelta, 0 }),
+                    else => {},
+                },
                 else => {},
             }
         }
@@ -176,7 +170,7 @@ pub fn main(init: std.process.Init) !void {
 
             submit.bindDescriptorHeaps();
 
-            cmds.imageBarrier(swapImage, .{}, .Graphics, .{.attachmentWrite = true}, .Graphics);
+            cmds.imageBarrier(swapImage, .{}, .Graphics, .{ .attachmentWrite = true }, .Graphics);
 
             if (depthBufferNeedsTransition) {
                 cmds.imageBarrier(&depthBuffer, .{}, .Graphics, .{ .attachmentWrite = true }, .Graphics);
@@ -186,10 +180,7 @@ pub fn main(init: std.process.Init) !void {
             const clearValue = c.VkClearColorValue{
                 .float32 = .{ 0, 0, 1, 1 },
             };
-            try cmds.renderBegin(
-                &[_]vk.RenderTarget{.{ .image = swapImage, .clearValue = c.VkClearValue{ .color = clearValue } }}, 
-                .{.image = &depthBuffer, .clearValue = .{.depthStencil = .{ .depth = 1e100 }}}
-            );
+            try cmds.renderBegin(&[_]vk.RenderTarget{.{ .image = swapImage, .clearValue = c.VkClearValue{ .color = clearValue } }}, .{ .image = &depthBuffer, .clearValue = .{ .depthStencil = .{ .depth = 1e100 } } });
 
             const viewRect = c.VkRect2D{ .extent = swapImage.desc.extent2D() };
             cmds.setViewport(&c.VkViewport{
@@ -213,11 +204,11 @@ pub fn main(init: std.process.Init) !void {
                 1.0 / @as(f32, @floatFromInt(swapImage.desc.width)),
                 1.0 / @as(f32, @floatFromInt(swapImage.desc.height)),
             };
-            try font.render("Kekekekekekekekekekekekekekekekekekekekekekekekekekekekekekekekekekz", .{50, 50}, pixelSize, .{1, 1, 0, 1}, submit);
+            try font.render("Kekekekekekekekekekekekekekekekekekekekekekekekekekekekekekekekekekz", .{ 50, 50 }, pixelSize, .{ 1, 1, 0, 1 }, submit);
 
             cmds.renderEnd();
 
-            cmds.imageBarrier(swapImage, .{.attachmentWrite = true}, .Graphics, .{.present = true}, .Graphics);
+            cmds.imageBarrier(swapImage, .{ .attachmentWrite = true }, .Graphics, .{ .present = true }, .Graphics);
 
             try cmds.end();
             try submit.submit(&submit.submitSemaphore);
@@ -236,10 +227,13 @@ pub fn main(init: std.process.Init) !void {
                 const desc = &window.swapchain.images[0].desc;
                 scene.camera.aspect = @as(f32, @floatFromInt(desc.width)) / @as(f32, @floatFromInt(desc.height));
                 depthBuffer = try vk.Image.init(&rend.gfx, &.{
-                    .width = desc.width, 
-                    .height = desc.height, 
+                    .width = desc.width,
+                    .height = desc.height,
                     .format = c.VK_FORMAT_D32_SFLOAT,
-                    .usage = .{.attachmentRead = true, .attachmentWrite = true,},
+                    .usage = .{
+                        .attachmentRead = true,
+                        .attachmentWrite = true,
+                    },
                 });
                 depthBufferNeedsTransition = true;
             }
@@ -256,20 +250,9 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn initScene(scene: *Scene, upload: *r.SubmitInfo) !void {
-    var pipelineFlat = try scene.renderer.pipelines.getPipeline(&.{
-        .name = "shaders/flat", 
-        .data = .{.graphics = .{
-            .cullMode = c.VK_CULL_MODE_BACK_BIT,
-            .depthWrite = true,
-            .depthCompareOp = c.VK_COMPARE_OP_LESS,
-            .depthAttachmentFormat = c.VK_FORMAT_D32_SFLOAT,
-            .colorAttachments = @constCast(&[_]vk.Pipeline.GraphicsState.ColorAttachment{
-                .{
-                    .format = scene.renderer.gfx.swapchainFormat,
-                }
-            })
-        }}
-    });
+    var pipelineFlat = try scene.renderer.pipelines.getPipeline(&.{ .name = "shaders/flat", .data = .{ .graphics = .{ .cullMode = c.VK_CULL_MODE_BACK_BIT, .depthWrite = true, .depthCompareOp = c.VK_COMPARE_OP_LESS, .depthAttachmentFormat = c.VK_FORMAT_D32_SFLOAT, .colorAttachments = @constCast(&[_]vk.Pipeline.GraphicsState.ColorAttachment{.{
+        .format = scene.renderer.gfx.swapchainFormat,
+    }}) } } });
     defer pipelineFlat.clear(scene.alloc());
 
     const Material = @import("renderer/material.zig");
@@ -280,17 +263,17 @@ fn initScene(scene: *Scene, upload: *r.SubmitInfo) !void {
     materialFlat.data().?.pipeline.assign(&pipelineFlat, scene.alloc());
 
     const cubeVerts: [8][3]f32 = .{
-        .{-1, -1, -1},
-        .{-1, -1,  1},
-        .{-1,  1, -1},
-        .{-1,  1,  1},
-        .{ 1, -1, -1},
-        .{ 1, -1,  1},
-        .{ 1,  1, -1},
-        .{ 1,  1,  1},
+        .{ -1, -1, -1 },
+        .{ -1, -1, 1 },
+        .{ -1, 1, -1 },
+        .{ -1, 1, 1 },
+        .{ 1, -1, -1 },
+        .{ 1, -1, 1 },
+        .{ 1, 1, -1 },
+        .{ 1, 1, 1 },
     };
 
-    const cubeIndices: [6*2*3]u32 = .{
+    const cubeIndices: [6 * 2 * 3]u32 = .{
         0, 1, 2,
         2, 1, 3,
         5, 4, 6,
@@ -307,7 +290,7 @@ fn initScene(scene: *Scene, upload: *r.SubmitInfo) !void {
 
     const Mesh = @import("renderer/mesh.zig");
     var meshCube: Mesh.Rc = .{};
-    try meshCube.allocate(scene.alloc(), try Mesh.initData(upload, 3*@sizeOf(f32), @ptrCast(&cubeVerts), &cubeIndices));
+    try meshCube.allocate(scene.alloc(), try Mesh.initData(upload, 3 * @sizeOf(f32), @ptrCast(&cubeVerts), &cubeIndices));
     defer meshCube.clear(scene.alloc());
 
     var cubeObj: Scene.Object.Rc = .{};
@@ -321,5 +304,5 @@ fn initScene(scene: *Scene, upload: *r.SubmitInfo) !void {
     try scene.objects.append(scene.alloc(), .{});
     scene.objects.items[scene.objects.items.len - 1].assign(&cubeObj, scene.alloc());
 
-    scene.camera.translate(Scene.Vec3f.Simd{0, 0, 5});
+    scene.camera.translate(Scene.Vec3f.Simd{ 0, 0, 5 });
 }
