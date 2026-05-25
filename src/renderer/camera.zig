@@ -32,7 +32,7 @@ pub fn translate(self: *Self, delta: Vec3f.Simd) void {
 
 pub fn rotate(self: *Self, angles: Vec3f.Simd) void {
     inline for (0..3) |d| {
-        const rot = Mat4f.rotate3D(4, angles[0], Vec4f.cardinal(d, 1));
+        const rot = Mat4f.rotate3D(4, angles[d], Vec4f.cardinal(d, 1));
         self.transform = Mat4f.mul(4, self.transform, rot);
     }
 }

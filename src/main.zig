@@ -125,6 +125,8 @@ pub fn main(init: std.process.Init) !void {
         commands.deinit(rend.gfx.alloc);
     }
 
+    const transDelta: f32 = 0.1;
+    const rotDelta: f32 = std.math.degreesToRadians(5);
     var running = true;
     var event = std.mem.zeroes(c.SDL_Event);
     while (running) {
@@ -141,6 +143,18 @@ pub fn main(init: std.process.Init) !void {
                             window.swapchain.setNumImages(window.swapchain.numImages % window.swapchain.maxNumImages + 1);
                             std.log.info("Attempting to set number of swapchain images to {} of {} max", .{window.swapchain.numImages, window.swapchain.maxNumImages});
                         },
+                        c.SDLK_W => scene.camera.translate(.{0, 0, -transDelta}),
+                        c.SDLK_S => scene.camera.translate(.{0, 0, transDelta}),
+                        c.SDLK_A => scene.camera.translate(.{-transDelta, 0, 0}),
+                        c.SDLK_D => scene.camera.translate(.{transDelta, 0, 0}),
+                        c.SDLK_R => scene.camera.translate(.{0, transDelta, 0}),
+                        c.SDLK_F => scene.camera.translate(.{0, -transDelta, 0}),
+                        c.SDLK_T => scene.camera.rotate(.{rotDelta, 0, 0}),
+                        c.SDLK_G => scene.camera.rotate(.{-rotDelta, 0, 0}),
+                        c.SDLK_Q => scene.camera.rotate(.{0, 0, -rotDelta}),
+                        c.SDLK_E => scene.camera.rotate(.{0, 0, rotDelta}),
+                        c.SDLK_Z => scene.camera.rotate(.{0, rotDelta, 0}),
+                        c.SDLK_C => scene.camera.rotate(.{0, -rotDelta, 0}),
                         else => {},
                     },
                 else => {},
@@ -213,9 +227,11 @@ pub fn main(init: std.process.Init) !void {
 
             frames += 1;
         } else {
-            if (depthBuffer.handle != null)
-                depthBuffer.deinit();
             try window.swapchain.recreate();
+            if (depthBuffer.handle != null) {
+                depthBuffer.deinit();
+                depthBuffer.handle = null;
+            }
             if (window.swapchain.isValid()) {
                 const desc = &window.swapchain.images[0].desc;
                 scene.camera.aspect = @as(f32, @floatFromInt(desc.width)) / @as(f32, @floatFromInt(desc.height));
@@ -283,10 +299,10 @@ fn initScene(scene: *Scene, upload: *r.SubmitInfo) !void {
         4, 2, 6,
         3, 1, 5,
         3, 5, 7,
-        0, 1, 4,
-        4, 1, 5,
-        3, 2, 6,
-        3, 6, 7,
+        1, 0, 4,
+        1, 4, 5,
+        2, 3, 6,
+        6, 3, 7,
     };
 
     const Mesh = @import("renderer/mesh.zig");

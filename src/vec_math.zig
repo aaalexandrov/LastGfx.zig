@@ -98,7 +98,7 @@ pub fn Vec(comptime N: u32, comptime T: type) type {
             return @sqrt(length2(v));
         }
 
-        pub fn normalize(v: Simd) T {
+        pub fn normalize(v: Simd) Simd {
             const len = length(v);
             if (std.math.approxEqAbs(T, len, 0, Eps))
                 return v;
@@ -348,7 +348,7 @@ pub fn Mat(comptime R: u32, comptime C: u32, comptime T: type) type {
             const s = @sin(a);
 
             const axis = AxisVec.normalize(axis_);
-            const temp = @as(Simd, @splat(1 - c)) * axis;
+            const temp = @as(Col.Simd, @splat(1 - c)) * axis;
 
             var rotate: Simd = diag(1);
             rotate[0][0] = c + temp[0] * axis[0];
