@@ -8,7 +8,7 @@ const Scene = @import("renderer/scene.zig");
 pub fn main(init: std.process.Init) !void {
     var rend: r.Renderer = undefined;
     try rend.init(init.gpa, init.io, std.debug.runtime_safety, 1024, 256);
-    defer rend.deinit();
+    defer rend.deinit() catch {};
 
     var window = try r.Window.init(&rend, "LastGfx", 400, 300, c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_VULKAN);
     defer window.deinit() catch {};
@@ -41,7 +41,7 @@ pub fn main(init: std.process.Init) !void {
     });
     defer image.deinit();
 
-    const linearSamplerDescriptor = try rend.setDescriptor(&.{ .sampler = .{} });
+    const linearSamplerDescriptor = try rend.getSampler(&.{});
 
     const imageDescriptor = try rend.setDescriptor(&.{ .image = .{ .obj = &image } });
 

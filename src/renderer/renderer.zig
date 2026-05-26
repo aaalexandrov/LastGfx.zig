@@ -370,10 +370,13 @@ const DescriptorHeapManaged = descr.DescriptorHeapManaged;
 const Pipelines = @import("pipelines.zig");
 pub const RcPipeline = Pipelines.RcPipeline;
 
+const Samplers = @import("samplers.zig");
+
 pub const Renderer = struct {
     gfx: vk.Gfx,
     resources: DescriptorHeapManaged,
     samplers: DescriptorHeapManaged,
+    samplerCache: Samplers,
     bufferPool: BufferPool,
     pipelines: Pipelines,
 
@@ -387,13 +390,15 @@ pub const Renderer = struct {
         try self.gfx.init(alloc, io, debug);
         try self.resources.init(&self.gfx, .Resource, numResourceDescriptors orelse @intCast(self.gfx.physical.maxResourceDescriptors()));
         try self.samplers.init(&self.gfx, .Sampler, numSamplerDescriptors orelse @intCast(self.gfx.physical.maxSamplerDescriptors()));
+        try self.samplerCache.init(&self.samplers);
         self.bufferPool = BufferPool.init(&self.gfx);
         try self.pipelines.init(&self.gfx);
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *Self) !void {
         self.pipelines.deinit();
         self.bufferPool.deinit();
+        try self.samplerCache.deinit();
         self.samplers.deinit();
         self.resources.deinit();
         self.gfx.deinit();
@@ -417,5 +422,9 @@ pub const Renderer = struct {
     pub fn freeDescriptor(self: *Self, desc: vk.HeapDescriptor) !void {
         const heap = self.getHeapForDescriptorType(desc.type);
         try heap.freeDescriptor(desc);
+    }
+
+    pub fn getSampler(self: *Self, samplerDesc: *const vk.Sampler.Descriptor) !vk.HeapDescriptor {
+        return try self.samplerCache.get(samplerDesc);
     }
 };
