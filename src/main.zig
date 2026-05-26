@@ -105,13 +105,6 @@ pub fn main(init: std.process.Init) !void {
         try upload.cmds.waitFinished();
     }
 
-    const timeStart = std.Io.Timestamp.now(init.io, .real);
-    var frames: i64 = 0;
-    defer {
-        const elapsed: f64 = @as(f64, @floatFromInt(timeStart.untilNow(init.io, .real).toMilliseconds())) / @as(f64, @floatFromInt(std.time.ms_per_s));
-        std.log.info("Frames: {}, seconds: {d:1.3}, average FPS: {d:1.3}", .{ frames, elapsed, @as(f64, @floatFromInt(frames)) / elapsed });
-    }
-
     var commands = try std.ArrayList(r.SubmitInfo).initCapacity(rend.gfx.alloc, 8);
     var commandsIndex: u8 = 0;
     defer {
@@ -120,8 +113,17 @@ pub fn main(init: std.process.Init) !void {
         commands.deinit(rend.gfx.alloc);
     }
 
-    const transDelta: f32 = 0.1;
-    const rotDelta: f32 = std.math.degreesToRadians(5);
+    const transDelta: f32 = 10;
+    const rotDelta: f32 = std.math.degreesToRadians(90);
+
+    const timeStart = std.Io.Timestamp.now(init.io, .real);
+    var timePrev = timeStart;
+    var frames: i64 = 0;
+    defer {
+        const elapsed: f64 = durationToSeconds(f64, timeStart.untilNow(init.io, .real));
+        std.log.info("Frames: {}, seconds: {d:1.3}, average FPS: {d:1.3}", .{ frames, elapsed, @as(f64, @floatFromInt(frames)) / elapsed });
+    }
+
     var running = true;
     var event = std.mem.zeroes(c.SDL_Event);
     while (running) {
@@ -137,23 +139,15 @@ pub fn main(init: std.process.Init) !void {
                         window.swapchain.setNumImages(window.swapchain.numImages % window.swapchain.maxNumImages + 1);
                         std.log.info("Attempting to set number of swapchain images to {} of {} max", .{ window.swapchain.numImages, window.swapchain.maxNumImages });
                     },
-                    c.SDLK_W => scene.camera.translate(.{ 0, 0, -transDelta }),
-                    c.SDLK_S => scene.camera.translate(.{ 0, 0, transDelta }),
-                    c.SDLK_A => scene.camera.translate(.{ -transDelta, 0, 0 }),
-                    c.SDLK_D => scene.camera.translate(.{ transDelta, 0, 0 }),
-                    c.SDLK_R => scene.camera.translate(.{ 0, transDelta, 0 }),
-                    c.SDLK_F => scene.camera.translate(.{ 0, -transDelta, 0 }),
-                    c.SDLK_T => scene.camera.rotate(.{ rotDelta, 0, 0 }),
-                    c.SDLK_G => scene.camera.rotate(.{ -rotDelta, 0, 0 }),
-                    c.SDLK_Z => scene.camera.rotate(.{ 0, 0, -rotDelta }),
-                    c.SDLK_C => scene.camera.rotate(.{ 0, 0, rotDelta }),
-                    c.SDLK_Q => scene.camera.rotate(.{ 0, rotDelta, 0 }),
-                    c.SDLK_E => scene.camera.rotate(.{ 0, -rotDelta, 0 }),
                     else => {},
                 },
                 else => {},
             }
         }
+
+        const timeNow = std.Io.Timestamp.now(init.io, .real);
+        const timeDelta = durationToSeconds(f32, timePrev.durationTo(timeNow));
+        timePrev = timeNow;
 
         var swapchainImage: ?*vk.Image = null;
         if (window.swapchain.isValid()) {
@@ -164,6 +158,8 @@ pub fn main(init: std.process.Init) !void {
         }
 
         if (swapchainImage) |swapImage| {
+            pollCameraInput(&scene.camera, transDelta * timeDelta, rotDelta * timeDelta);
+
             const submit = &commands.items[commandsIndex];
             const cmds = &submit.cmds;
             try cmds.begin();
@@ -305,4 +301,42 @@ fn initScene(scene: *Scene, upload: *r.SubmitInfo) !void {
     scene.objects.items[scene.objects.items.len - 1].assign(&cubeObj, scene.alloc());
 
     scene.camera.translate(Scene.Vec3f.Simd{ 0, 0, 5 });
+}
+
+fn durationToSeconds(comptime T: type, duration: std.Io.Duration) T {
+    return @as(T, @floatFromInt(duration.toNanoseconds())) / @as(T, @floatFromInt(std.time.ns_per_s));
+}
+
+fn pollCameraInput(camera: *Scene.Camera, transDelta: f32, rotDelta: f32) void {
+    const keyState = c.SDL_GetKeyboardState(null);
+
+    var trans = Scene.Vec3f.splat(0);
+    if (keyState[c.SDL_SCANCODE_A])
+        trans[0] -= transDelta;
+    if (keyState[c.SDL_SCANCODE_D])
+        trans[0] += transDelta;
+    if (keyState[c.SDL_SCANCODE_R])
+        trans[1] -= transDelta;
+    if (keyState[c.SDL_SCANCODE_F])
+        trans[1] += transDelta;
+    if (keyState[c.SDL_SCANCODE_W])
+        trans[2] -= transDelta;
+    if (keyState[c.SDL_SCANCODE_S])
+        trans[2] += transDelta;
+    camera.translate(trans);
+
+    var rot = Scene.Vec3f.splat(0);
+    if (keyState[c.SDL_SCANCODE_G])
+        rot[0] -= rotDelta;
+    if (keyState[c.SDL_SCANCODE_T])
+        rot[0] += rotDelta;
+    if (keyState[c.SDL_SCANCODE_E])
+        rot[1] -= rotDelta;
+    if (keyState[c.SDL_SCANCODE_Q])
+        rot[1] += rotDelta;
+    if (keyState[c.SDL_SCANCODE_Z])
+        rot[2] -= rotDelta;
+    if (keyState[c.SDL_SCANCODE_C])
+        rot[2] += rotDelta;
+    camera.rotate(rot);
 }

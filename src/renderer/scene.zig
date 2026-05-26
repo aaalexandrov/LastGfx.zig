@@ -3,8 +3,8 @@ const v = @import("../vec_math.zig");
 const rc = @import("../rc_ptr.zig");
 const r = @import("renderer.zig");
 
-const Camera = @import("camera.zig");
-const Light = @import("light.zig");
+pub const Camera = @import("camera.zig");
+pub const Light = @import("light.zig");
 
 pub const Vec3f = v.Vec(3, f32);
 pub const Vec4f = v.Vec(4, f32);
@@ -23,7 +23,7 @@ pub const Self = @This();
 pub fn init(self: *Self, rend: *r.Renderer) !void {
     self.camera = .{};
     self.light = .{};
-    self.environmentColor = .{0.4, 0.4, 0.4};
+    self.environmentColor = .{ 0.4, 0.4, 0.4 };
     self.objects = try std.array_list.Aligned(Object.Rc, null).initCapacity(rend.gfx.alloc, 16);
     self.renderer = rend;
 }
