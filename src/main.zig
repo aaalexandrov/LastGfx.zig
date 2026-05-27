@@ -23,17 +23,6 @@ pub fn main(init: std.process.Init) !void {
     try Font.initStatic(&rend, "shaders/font", rend.gfx.swapchainFormat);
     defer Font.deinitStatic(&rend);
 
-    var pipeline = try rend.pipelines.getPipeline(&.{ .name = "shaders/triangle", .data = .{ .graphics = .{ .colorAttachments = @constCast(&[_]vk.Pipeline.GraphicsState.ColorAttachment{.{
-        .format = rend.gfx.swapchainFormat,
-    }}) } } });
-    defer pipeline.clear(rend.gfx.alloc);
-
-    var buffer = try vk.Buffer.init(&rend.gfx, &.{
-        .size = 1024,
-        .usage = vk.Usage{ .storageRead = true, .hostWrite = true },
-    });
-    defer buffer.deinit();
-
     var image = try vk.Image.init(&rend.gfx, &.{
         .format = c.VK_FORMAT_R8G8B8A8_UNORM,
         .width = 64,
@@ -44,18 +33,6 @@ pub fn main(init: std.process.Init) !void {
     const linearSamplerDescriptor = try rend.getSampler(&.{});
 
     const imageDescriptor = try rend.setDescriptor(&.{ .image = .{ .obj = &image } });
-
-    const InputBuffer = extern struct {
-        color: [4]f32,
-        texIndex: u32,
-        samplerIndex: u32,
-    };
-    const bufContent = InputBuffer{
-        .color = .{ 1, 0.5, 0.0, 1 },
-        .texIndex = imageDescriptor.index,
-        .samplerIndex = linearSamplerDescriptor.index,
-    };
-    @as(*InputBuffer, @ptrCast(@alignCast(buffer.hostAddress))).* = bufContent;
 
     var font: Font = undefined;
     defer font.deinit(&rend) catch {};
@@ -81,7 +58,7 @@ pub fn main(init: std.process.Init) !void {
         for (0..@intCast(image.desc.height)) |y| {
             for (0..@intCast(image.desc.width)) |x| {
                 const val: u8 = @intCast((y / 8 + x / 8) % 2 * 255);
-                @memcpy(pixel[0..4], &[4]u8{ val, 0, val, 1 });
+                @memcpy(pixel[0..4], &[4]u8{ val, val, val, 1 });
                 pixel = pixel + 4;
             }
         }
@@ -98,7 +75,7 @@ pub fn main(init: std.process.Init) !void {
             },
         });
 
-        try initScene(&scene, &upload);
+        try initScene(&scene, &upload, imageDescriptor, linearSamplerDescriptor);
 
         try upload.cmds.end();
         try upload.cmds.submit(null);
@@ -123,6 +100,7 @@ pub fn main(init: std.process.Init) !void {
         const elapsed: f64 = durationToSeconds(f64, timeStart.untilNow(init.io, .real));
         std.log.info("Frames: {}, seconds: {d:1.3}, average FPS: {d:1.3}", .{ frames, elapsed, @as(f64, @floatFromInt(frames)) / elapsed });
     }
+    var printBuf: [1024]u8 = undefined;
 
     var running = true;
     var event = std.mem.zeroes(c.SDL_Event);
@@ -189,18 +167,14 @@ pub fn main(init: std.process.Init) !void {
             });
             cmds.setScissor(&viewRect);
 
-            cmds.pushData(&buffer.deviceAddress);
-
-            cmds.bindRenderPipeline(pipeline.data().?);
-            cmds.drawMeshTasks(3, 1, 1);
-
             try scene.render(submit);
 
+            const fpsStr = try std.fmt.bufPrint(&printBuf, "fps:{d:1.2}", .{1.0 / timeDelta});
             const pixelSize: [2]f32 = .{
                 1.0 / @as(f32, @floatFromInt(swapImage.desc.width)),
                 1.0 / @as(f32, @floatFromInt(swapImage.desc.height)),
             };
-            try font.render("Kekekekekekekekekekekekekekekekekekekekekekekekekekekekekekekekekekz", .{ 50, 50 }, pixelSize, .{ 1, 1, 0, 1 }, submit);
+            try font.render(fpsStr, .{ 20, 20 }, pixelSize, .{ 1, 1, 0, 1 }, submit);
 
             cmds.renderEnd();
 
@@ -245,7 +219,7 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
-fn initScene(scene: *Scene, upload: *r.SubmitInfo) !void {
+fn initScene(scene: *Scene, upload: *r.SubmitInfo, albedo: vk.HeapDescriptor, sampler: vk.HeapDescriptor) !void {
     var pipelineFlat = try scene.renderer.pipelines.getPipeline(&.{ .name = "shaders/flat", .data = .{ .graphics = .{ .cullMode = c.VK_CULL_MODE_BACK_BIT, .depthWrite = true, .depthCompareOp = c.VK_COMPARE_OP_LESS, .depthAttachmentFormat = c.VK_FORMAT_D32_SFLOAT, .colorAttachments = @constCast(&[_]vk.Pipeline.GraphicsState.ColorAttachment{.{
         .format = scene.renderer.gfx.swapchainFormat,
     }}) } } });
@@ -257,6 +231,8 @@ fn initScene(scene: *Scene, upload: *r.SubmitInfo) !void {
     defer materialFlat.clear(scene.alloc());
 
     materialFlat.data().?.pipeline.assign(&pipelineFlat, scene.alloc());
+    materialFlat.data().?.properties.albedoIndex = albedo.index;
+    materialFlat.data().?.properties.samplerIndex = sampler.index;
 
     const cubeVerts: [8][3]f32 = .{
         .{ -1, -1, -1 },

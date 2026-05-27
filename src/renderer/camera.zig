@@ -14,7 +14,7 @@ farZ: f32 = 1e3,
 pub const Self = @This();
 
 pub fn getPos(self: *Self) Vec4f.Simd {
-    return Mat4f.row(self.transform, 3);
+    return self.transform[3];
 }
 
 pub fn getViewMatrix(self: *Self) !Mat4f.Simd {

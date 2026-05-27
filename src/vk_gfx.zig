@@ -97,13 +97,9 @@ pub const Gfx = struct {
 
         self.physical = try self.selectPhysicalDevice();
 
-        std.log.info("GPU: {s}, driver ver.{s}, conformance ver.{}.{}.{}.{}, Vulkan ver.{}.{}.{}.{}\n", .{
+        std.log.info("GPU: {s}, driver ver.{s}, Vulkan ver.{}.{}.{}.{}\n", .{
             self.physical.props.properties.deviceName,
             self.physical.driverProps.driverInfo,
-            self.physical.driverProps.conformanceVersion.major,
-            self.physical.driverProps.conformanceVersion.minor,
-            self.physical.driverProps.conformanceVersion.subminor,
-            self.physical.driverProps.conformanceVersion.patch,
             c.VK_API_VERSION_VARIANT(self.physical.props.properties.apiVersion),
             c.VK_API_VERSION_MAJOR(self.physical.props.properties.apiVersion),
             c.VK_API_VERSION_MINOR(self.physical.props.properties.apiVersion),

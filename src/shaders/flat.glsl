@@ -12,6 +12,8 @@ struct MaterialProperties {
     vec3 color;
     float roughness;
     float metallic;
+    uint albedoIndex;
+    uint samplerIndex;
 };
 
 layout(scalar, buffer_reference, buffer_reference_align = 8) readonly buffer IndexData {
@@ -46,6 +48,6 @@ layout(push_constant) uniform constants {
     InputData inputData;
 } pushData;
 
-//layout(descriptor_heap) uniform sampler heapSampler[];
-//layout(descriptor_heap) uniform texture2D heapTexture2D[];
+layout(descriptor_heap) uniform sampler heapSampler[];
+layout(descriptor_heap) uniform texture2D heapTexture2D[];
 

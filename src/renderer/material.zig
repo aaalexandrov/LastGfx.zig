@@ -6,9 +6,11 @@ const vk = @import("../vk_gfx.zig");
 pub const Rc = rc.SharedPtr(Self, Self.deinit);
 
 pub const Properties = extern struct {
-    color: [3]f32 = .{1, 0.5, 1},
+    color: [3]f32 = .{1, 1, 1},
     roughness: f32 = 0.5,
     metallic: f32 = 0.1,
+    albedoIndex: u32 = 0,
+    samplerIndex: u32 = 0,
 };
 
 pipeline: r.RcPipeline = .{},
