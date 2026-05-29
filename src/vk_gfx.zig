@@ -1,5 +1,6 @@
 const std = @import("std");
 const c = @import("c");
+const SpirvReflect = @import("spirv_reflect.zig");
 
 fn DebugCallback(severity: c.VkDebugUtilsMessageSeverityFlagBitsEXT, msgType: c.VkDebugUtilsMessageTypeFlagsEXT, cbData: [*c]const c.VkDebugUtilsMessengerCallbackDataEXT, userData: ?*anyopaque) callconv(.c) c.VkBool32 {
     _ = userData;
@@ -868,6 +869,11 @@ pub const Shader = struct {
         const code = try std.Io.Dir.cwd().readFileAllocOptions(gfx.io, relativePath, gfx.alloc, .unlimited, std.mem.Alignment.of(u32), null);
         defer gfx.alloc.free(code);
         std.debug.assert(code.len % 4 == 0);
+
+        var refl: SpirvReflect = undefined;
+        try refl.init(gfx.alloc, filename, code);
+        defer refl.deinit();
+
         var self = try initCode(gfx, @as([*]const u32, @ptrCast(@alignCast(code.ptr)))[0..(code.len)]);
         self.filename = try gfx.alloc.dupeZ(u8, filename);
         return self;

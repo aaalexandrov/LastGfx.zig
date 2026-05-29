@@ -59,6 +59,7 @@ pub fn build(b: *std.Build) !void {
 
     exe_mod.addCSourceFile(.{.file = .{ .cwd_relative = "./src/cimport/vk_mem_alloc.cpp" }});
     exe_mod.addCSourceFile(.{.file = .{ .cwd_relative = "./src/cimport/stb_image.c" }});
+    exe_mod.addCSourceFile(.{.file = .{ .cwd_relative = "./src/cimport/spirv_reflect.c" }});
     exe_mod.link_libcpp = true;
 
     if (windowsVulkanSDKPath) |path| {

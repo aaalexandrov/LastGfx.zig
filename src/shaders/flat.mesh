@@ -34,7 +34,8 @@ void main()
     uint baseVertex = (triIndex - baseTri) * 3;
 
     for (uint i = 0; i < 3; ++i) {
-        vec3 modelPos = meshPositions.positions[meshTriangles.indices[triIndex*3+i]];
+        uint ind = meshTriangles.indices[triIndex*3+i];
+        vec3 modelPos = meshPositions.positions[ind];
         pos[i] = (world * vec4(modelPos, 1)).xyz;
         gl_MeshVerticesEXT[baseVertex + i].gl_Position = viewProj * vec4(pos[i], 1);
         worldPositions[baseVertex + i] = pos[i];
