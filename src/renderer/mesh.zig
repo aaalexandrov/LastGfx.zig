@@ -4,7 +4,7 @@ const r = @import("renderer.zig");
 const vk = @import("../vk_gfx.zig");
 const c = @import("c");
 
-pub const Rc = rc.SharedPtr(Self, rc.simpleDeinit(Self));
+pub const Rc = rc.SharedPtr(Self, rc.DeinitCallContext);
 
 vertexSize: u32,
 numVertices: u32,

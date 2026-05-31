@@ -1,16 +1,16 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-pub fn emptyDeinit(_: anytype, _: std.mem.Allocator) void {}
-pub fn simpleDeinit(comptime T: type) fn (data: *T, _: std.mem.Allocator) void {
-    return struct {
-        fn simple(data: *T, _: std.mem.Allocator) void {
-            data.deinit();
-        }
-    }.simple;
-}
+pub const NoDeinitContext = struct {
+    fn deinit(_: anytype, _: std.mem.Allocator) void {}
+};
+pub const DeinitCallContext = struct {
+    fn deinit(data: anytype, _: std.mem.Allocator) void {
+        data.deinit();
+    }
+};
 
-fn RcInner(T: type, deinitFn: anytype) type {
+fn RcInner(T: type, Ctx: type) type {
     return struct {
         counters: [2]Counter = .{
             0,
@@ -20,6 +20,7 @@ fn RcInner(T: type, deinitFn: anytype) type {
 
         pub const Counter = u32;
         pub const Data = T;
+        pub const Context = Ctx;
         pub const Self = @This();
 
         fn addRef(self: *Self, comptime ref: u1) void {
@@ -56,20 +57,21 @@ fn RcInner(T: type, deinitFn: anytype) type {
         }
 
         fn deinitData(data_: *Data, alloc: std.mem.Allocator) void {
-            deinitFn(data_, alloc);
+            Context.deinit(data_, alloc);
         }
     };
 }
 
-pub fn RcPtr(T: type, weak: bool, deinitFn: anytype) type {
+pub fn RcPtr(T: type, weak: bool, Ctx: type) type {
     return struct {
         inner: ?*Inner = null,
 
-        const Inner = RcInner(T, deinitFn);
+        const Inner = RcInner(T, Ctx);
 
         pub const Data = T;
+        pub const Context = Ctx;
         pub const Weak: u1 = @intFromBool(weak);
-        pub const AlternativePtr = RcPtr(T, !weak, deinitFn);
+        pub const AlternativePtr = RcPtr(T, !weak, Ctx);
         pub const WeakPtr = if (weak) Self else AlternativePtr;
         pub const StrongPtr = if (weak) AlternativePtr else Self;
         pub const Self = @This();
@@ -139,17 +141,17 @@ pub fn RcPtr(T: type, weak: bool, deinitFn: anytype) type {
     };
 }
 
-pub fn SharedPtr(T: type, deinitFn: anytype) type {
-    return RcPtr(T, false, deinitFn);
+pub fn SharedPtr(T: type, Ctx: type) type {
+    return RcPtr(T, false, Ctx);
 }
 pub fn SharedPtrNoDeinit(T: type) type {
-    return RcPtr(T, false, emptyDeinit);
+    return RcPtr(T, false, NoDeinitContext);
 }
-pub fn WeakPtr(T: type, deinitFn: anytype) type {
-    return RcPtr(T, true, deinitFn);
+pub fn WeakPtr(T: type, Ctx: type) type {
+    return RcPtr(T, true, Ctx);
 }
 pub fn WeakPtrNoDeinit(T: type) type {
-    return RcPtr(T, true, emptyDeinit);
+    return RcPtr(T, true, NoDeinitContext);
 }
 
 pub fn RcTest(alloc: std.mem.Allocator) !void {

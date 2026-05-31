@@ -3,7 +3,7 @@ const rc = @import("../rc_ptr.zig");
 const r = @import("renderer.zig");
 const vk = @import("../vk_gfx.zig");
 
-pub const Rc = rc.SharedPtr(Self, Self.deinit);
+pub const Rc = rc.SharedPtr(Self, Self);
 
 pub const Properties = extern struct {
     color: [3]f32 = .{1, 1, 1},

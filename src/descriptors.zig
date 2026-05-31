@@ -66,6 +66,13 @@ pub const DescriptorHeapWriter = struct {
         self.updatesSize += descSize;
     }
 
+    pub fn removeDescriptor(self: *Self, dstIndex: u32, descType: vk.DescriptorType) void {
+        const descSize = self.descHeap.getDescriptorSize(descType);
+        const dstOffs = dstIndex * descSize;
+        if (self.updateDstToUpdateIndex.swapRemove(dstOffs))
+            self.updatesSize -= descSize;
+    }
+
     pub fn writeDescriptors(self: *Self, dst: []u8) !void {
         std.debug.assert(dst.len == self.updatesSize);
 
@@ -212,6 +219,7 @@ pub const DescriptorHeapManaged = struct {
 
     pub fn freeDescriptor(self: *Self, desc: vk.HeapDescriptor) !void {
         const descOffset = self.heap.getDescriptorOffset(desc);
+        self.writer.removeDescriptor(desc.index, desc.type);
         try self.rangeAlloc.free(descOffset);
     }
 
@@ -219,3 +227,24 @@ pub const DescriptorHeapManaged = struct {
         return self.writer.updatesSize > 0;
     }
 };
+
+pub fn HeapResourceManaged(Res: type) type {
+    return struct {
+        obj: Res,
+        heapDescriptor: vk.HeapDescriptor,
+
+        pub var heap: ?*DescriptorHeapManaged = null;
+
+        pub const Self = @This();
+
+        pub fn init(self: *Self, obj: Res) !void {
+            self.obj = obj;
+            self.heapDescriptor = try Self.heap.?.setDescriptor(&self.obj.defaultDescriptorData());
+        }
+
+        pub fn deinit(self: *Self) void {
+            Self.heap.?.freeDescriptor(self.heapDescriptor) catch unreachable;
+            self.obj.deinit();
+        }
+    };
+}

@@ -16,7 +16,7 @@ pub const Pipeline = struct {
     }
 };
 
-pub const RcPipeline = rc.SharedPtr(Pipeline, rc.simpleDeinit(Pipeline));
+pub const RcPipeline = rc.SharedPtr(Pipeline, rc.DeinitCallContext);
 
 pub const PipelineInfo = struct {
     name: []const u8,

@@ -12,7 +12,7 @@ pub const Vec3f = Scene.Vec3f;
 pub const Vec4f = Scene.Vec4f;
 pub const Mat4f = Scene.Mat4f;
 
-pub const Rc = rc.SharedPtr(Self, Self.deinit);
+pub const Rc = rc.SharedPtr(Self, Self);
 
 transform: Mat4f.Simd = Mat4f.diag(1),
 material: Material.Rc = .{},

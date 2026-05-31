@@ -2,6 +2,13 @@ const std = @import("std");
 const c = @import("c");
 const vk = @import("../vk_gfx.zig");
 const descr = @import("../descriptors.zig");
+const rc = @import("../rc_ptr.zig");
+
+pub const Texture = descr.HeapResourceManaged(vk.Image);
+pub const RcTexture = rc.SharedPtr(Texture, rc.DeinitCallContext);
+
+pub const Buffer = descr.HeapResourceManaged(vk.Buffer);
+pub const RcBuffer = rc.SharedPtr(Buffer, rc.DeinitCallContext);
 
 fn ListNode(List: type, T: type) type {
     return struct {
@@ -289,7 +296,7 @@ pub const SubmitInfo = struct {
         );
     }
 
-    pub fn loadTexture(self: *Self, filename: [:0]const u8, usage: vk.Usage) !vk.Image {
+    pub fn loadImage(self: *Self, filename: [:0]const u8, usage: vk.Usage) !vk.Image {
         std.debug.assert(usage.transferDst);
 
         var loaded = try STBImage.load(filename, 4);
@@ -319,6 +326,17 @@ pub const SubmitInfo = struct {
         });
 
         return image;
+    }
+
+    pub fn loadTexture(self: *Self, tex: *Texture, filename: [:0]const u8, usage: vk.Usage) !void {
+        try tex.init(try self.loadImage(filename, usage));
+    }
+
+    pub fn loadRcTexture(self: *Self, filename: [:0]const u8, usage: vk.Usage) !RcTexture {
+        var tex: RcTexture = .{};
+        try tex.allocate(self.renderer.gfx.alloc, undefined);
+        try self.loadTexture(tex.data().?, filename, usage);
+        return tex;
     }
 
     pub fn uploadHeapDescriptors(self: *Self, descHeap: *DescriptorHeapManaged, cmds: *vk.Commands) !void {
@@ -393,9 +411,13 @@ pub const Renderer = struct {
         try self.samplerCache.init(&self.samplers);
         self.bufferPool = BufferPool.init(&self.gfx);
         try self.pipelines.init(&self.gfx);
+        Texture.heap = &self.resources;
+        Buffer.heap = &self.resources;
     }
 
     pub fn deinit(self: *Self) !void {
+        Buffer.heap = null;
+        Texture.heap = null;
         self.pipelines.deinit();
         self.bufferPool.deinit();
         try self.samplerCache.deinit();

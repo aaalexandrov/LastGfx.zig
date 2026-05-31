@@ -1165,6 +1165,10 @@ pub const Buffer = struct {
         return addrRange;
     }
 
+    pub fn defaultDescriptorData(self: *Self) DescriptorData {
+        return .{.buffer=.{.obj = self}};
+    }
+
     fn usageFlags(usage: Usage) c.VkBufferUsageFlags2 {
         var bufUsage: c.VkBufferUsageFlags2 = c.VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT;
         if (usage.samplerHeap or usage.resourceHeap)
@@ -1342,6 +1346,10 @@ pub const Image = struct {
             c.vkDestroyImageView(self.gfx.device.handle, self.view, self.gfx.allocCB);
         if (self.allocation != null)
             c.vmaDestroyImage(self.gfx.vma, self.handle, self.allocation);
+    }
+
+    pub fn defaultDescriptorData(self: *Self) DescriptorData {
+        return .{.image=.{.obj=self}};
     }
 
     fn viewCreateInfo(self: *const Self, subresourceRange: ?*const c.VkImageSubresourceRange) c.VkImageViewCreateInfo {
