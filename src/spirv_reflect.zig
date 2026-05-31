@@ -2,61 +2,117 @@ const std = @import("std");
 const c = @import("c");
 const types = @import("types.zig");
 
-alloc: std.mem.Allocator,
-name: []const u8,
-spvModule: c.SpvReflectShaderModule,
+const TypeInfo = types.TypeInfo;
+const TypeRegistry = types.TypeRegistry;
 
-pub const Self = @This();
-
-pub fn init(self: *Self, alloc: std.mem.Allocator, name: []const u8, spvCode: []const u8) !void {
-    self.alloc = alloc;
-    self.name = try alloc.dupe(u8, name);
-    errdefer alloc.free(self.name);
-    const result = c.spvReflectCreateShaderModule(spvCode.len, spvCode.ptr, &self.spvModule);
+pub fn reflect(spvCode: []const u32, registry: *TypeRegistry) !void {
+    var spvModule: c.SpvReflectShaderModule = undefined;
+    const result = c.spvReflectCreateShaderModule(spvCode.len * @sizeOf(u32), spvCode.ptr, &spvModule);
     if (result != c.SPV_REFLECT_RESULT_SUCCESS)
         return error.SpvReflectFailed;
 
-    var typeReg = try types.TypeRegistry.init(alloc);
-    defer typeReg.deinit();
-
-    const ti = try typeReg.get(i32);
-    ti.dump(0);
-    const tb = try typeReg.get(bool);
-    tb.dump(0);
-    const ta = try typeReg.get([4]f32);
-    ta.dump(0);
-    const tp = try typeReg.get(*usize);
-    tp.dump(0);
-
-    const Kek = struct {
-        i: i32,
-        u: u32,
-        b: bool,
-    };
-    const ts = try typeReg.get(Kek);
-    ts.dump(0);
-    std.debug.assert(ts.info.Struct.members[0].typeInfo == ti);
-
-    (try typeReg.get(c.SpvReflectShaderModule)).dump(0);
-
-
-    for (0..self.spvModule.push_constant_block_count) |i| {
-        const varBlock: *c.SpvReflectBlockVariable = @ptrCast(&self.spvModule.push_constant_blocks[i]);
-        self.printBlock(varBlock, 0);
+    for (0..spvModule.push_constant_block_count) |i| {
+        const varBlock: *c.SpvReflectBlockVariable = @ptrCast(&spvModule.push_constant_blocks[i]);
+        _ = try parseVarType(varBlock, registry);
     }
+
+    c.spvReflectDestroyShaderModule(&spvModule);
 }
 
-pub fn deinit(self: *Self) void {
-    c.spvReflectDestroyShaderModule(&self.spvModule);
-    self.alloc.free(self.name);
+fn parseVarType(reflVar: *c.SpvReflectBlockVariable, registry: *TypeRegistry) !*TypeInfo {
+    const reflType: *c.SpvReflectTypeDescription = reflVar.type_description;
+    var curType: ?*TypeInfo = null;
+    const numericMask = c.SPV_REFLECT_TYPE_FLAG_BOOL | c.SPV_REFLECT_TYPE_FLAG_INT | c.SPV_REFLECT_TYPE_FLAG_FLOAT;
+    if (reflType.type_flags & numericMask != 0) {
+        std.debug.assert(reflType.traits.numeric.scalar.width == 32);
+        if ((reflType.type_flags & c.SPV_REFLECT_TYPE_FLAG_FLOAT) != 0) {
+            curType = @constCast(try registry.get(f32));
+        } else if ((reflType.type_flags & c.SPV_REFLECT_TYPE_FLAG_INT) != 0) {
+            curType = @constCast(if (reflType.traits.numeric.scalar.signedness == 0)
+                    try registry.get(u32)
+                else 
+                    try registry.get(i32));
+        } else {
+            std.debug.assert((reflType.type_flags & c.SPV_REFLECT_TYPE_FLAG_BOOL) != 0);
+            curType = @constCast(try registry.get(c.VkBool32));
+        }
+
+        if ((reflType.type_flags & c.SPV_REFLECT_TYPE_FLAG_VECTOR) != 0) {
+            curType = try getArray(registry, curType.?, reflType.traits.numeric.vector.component_count);
+        }
+
+        if ((reflType.type_flags & c.SPV_REFLECT_TYPE_FLAG_MATRIX) != 0) {
+            std.debug.assert((reflType.type_flags & c.SPV_REFLECT_TYPE_FLAG_VECTOR) != 0);
+            std.debug.assert(curType.?.info.Array.length == reflType.traits.numeric.matrix.row_count);
+            curType = try getArray(registry, curType.?, reflType.traits.numeric.matrix.column_count);
+        }
+    }
+
+    if ((reflType.type_flags & c.SPV_REFLECT_TYPE_FLAG_STRUCT) != 0) {
+        std.debug.assert(reflVar.member_count == reflType.member_count);
+        std.debug.assert(curType == null);
+        const typeName = std.mem.span(reflType.type_name);
+        curType = registry.find(typeName);
+        if (curType) |existing| {
+            std.debug.assert(existing.info.Struct.members.len == reflType.member_count);
+            return existing;
+        }
+        curType = try registry.getNew(typeName);
+        var members = try registry.alloc.alloc(types.TypeInfo.Member, reflType.member_count);
+        errdefer registry.alloc.free(members);
+        for (0..members.len) |i| {
+            members[i].name = try registry.alloc.dupe(u8, std.mem.span(reflVar.members[i].name));
+            members[i].typeInfo = try parseVarType(reflVar.members+i, registry);
+            members[i].offset = reflVar.members[i].offset;
+        }
+        if (members.len > 0) {
+            curType.?.size = members[members.len-1].offset + members[members.len-1].typeInfo.size;
+            curType.?.alignment = members[0].typeInfo.alignment;
+        }
+        curType.?.info = .{.Struct = .{.members = members}};
+    }
+
+    std.debug.assert(curType != null);
+
+    if ((reflType.type_flags & c.SPV_REFLECT_TYPE_FLAG_REF) != 0) {
+        var nameBuf: [256]u8 = undefined;
+        const ptrName = try std.fmt.bufPrint(&nameBuf, "*{s}", .{curType.?.name});
+        var ptrType = registry.find(ptrName);
+        if (ptrType) |existing| {
+            std.debug.assert(existing.info.Pointer.pointedType == curType);
+            return existing;
+        }
+        ptrType = try registry.getNew(ptrName);
+        ptrType.?.size = reflVar.size;
+        ptrType.?.alignment = reflVar.size;
+        ptrType.?.info = .{.Pointer = .{
+            .pointedType = curType.?,
+        }};
+        curType = ptrType;
+    }
+
+    if ((reflType.type_flags & c.SPV_REFLECT_TYPE_FLAG_ARRAY) != 0) {
+        std.debug.assert(curType.?.size == reflType.traits.array.stride);
+        for (0..reflType.traits.array.dims_count) |dim| {
+            curType = try getArray(registry, curType.?, reflType.traits.array.dims[dim]);
+        }
+    }
+
+    return curType.?;
 }
 
-fn printBlock(self: *Self, varBlock: *c.SpvReflectBlockVariable, depth: u32) void {
-    const indent = (" " ** 256)[0..depth*2];
-    const typeName: [*c]const u8 = varBlock.type_description.*.type_name orelse "";
-    std.log.info("{s}Var: {s}: {s}", .{indent, varBlock.name, typeName});
-    for (0..varBlock.member_count) |i| {
-
-        self.printBlock(@ptrCast(&varBlock.members[i]), depth + 1);
+fn getArray(registry: *TypeRegistry, elemType: *TypeInfo, len: usize) !*TypeInfo {
+    var nameBuf: [256]u8 = undefined;
+    const arrName = try std.fmt.bufPrint(&nameBuf, "[{}]{s}", .{len, elemType.name});
+    var arrType = registry.find(arrName);
+    if (arrType == null) {
+        arrType = try registry.getNew(arrName);
+        arrType.?.size = len * elemType.size;
+        arrType.?.alignment = elemType.alignment;
+        arrType.?.info = .{ .Array = .{
+            .elementType = elemType,
+            .length = len,
+        } };
     }
+    return arrType.?;
 }

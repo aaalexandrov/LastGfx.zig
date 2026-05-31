@@ -69,6 +69,6 @@ pub fn render(self: *Self, scene: *Scene, submit: *r.SubmitInfo) !void {
 
     submit.cmds.pushData(&staging.deviceAddress());
 
-    submit.cmds.bindRenderPipeline(material.pipeline.data().?);
+    submit.cmds.bindRenderPipeline(&material.pipeline.data().?.pipeline);
     submit.cmds.drawMeshTasks(numTriangles, 1, 1);
 }

@@ -2,6 +2,21 @@ const std = @import("std");
 const vk = @import("../vk_gfx.zig");
 const rc = @import("../rc_ptr.zig");
 const ha = @import("../hash_apply.zig");
+const types = @import("../types.zig");
+const spv = @import("../spirv_reflect.zig");
+
+pub const Pipeline = struct {
+    pipeline: vk.Pipeline,
+    pushType: *types.TypeInfo,
+    reflection: types.TypeRegistry,
+
+    pub fn deinit(self: *@This()) void {
+        self.reflection.deinit();
+        self.pipeline.deinit();
+    }
+};
+
+pub const RcPipeline = rc.SharedPtr(Pipeline, rc.simpleDeinit(Pipeline));
 
 pub const PipelineInfo = struct {
     name: []const u8,
@@ -10,8 +25,6 @@ pub const PipelineInfo = struct {
         compute: void,
     },
 };
-
-pub const RcPipeline = rc.SharedPtr(vk.Pipeline, rc.simpleDeinit(vk.Pipeline));
 
 pub const PipelineCache = std.array_hash_map.ArrayHashMap(
     PipelineInfo, 
@@ -54,7 +67,7 @@ pub fn getPipeline(self: *Self, info: *const PipelineInfo) !RcPipeline {
     return res;
 }
 
-pub fn loadPipeline(self: *Self, info: *const PipelineInfo) !vk.Pipeline {
+pub fn loadPipeline(self: *Self, info: *const PipelineInfo) !Pipeline {
     return switch (info.data) {
         .graphics => |*state| 
             self.loadGraphicsPipeline(info.name, state),
@@ -63,33 +76,46 @@ pub fn loadPipeline(self: *Self, info: *const PipelineInfo) !vk.Pipeline {
     };
 }
 
-pub fn loadGraphicsPipeline(self: *Self, path: []const u8, state: *const vk.Pipeline.GraphicsState) !vk.Pipeline {
-    var shaderMesh = mesh: {
-        const meshName = try std.mem.joinZ(self.gfx.alloc, "", &[_][]const u8{ path, ".mesh.spv" });
-        defer self.gfx.alloc.free(meshName);
-        break :mesh try vk.Shader.init(self.gfx, meshName);
-    };
+fn loadShader(self: *Self, path: []const u8, suffix: []const u8, reflection: *types.TypeRegistry) !vk.Shader {
+    var pathBuf: [std.fs.max_path_bytes]u8 = undefined;
+
+    const loadPath = try std.fmt.bufPrint(&pathBuf, "{s}{s}", .{path, suffix});
+
+    const code = try std.Io.Dir.cwd().readFileAllocOptions(self.gfx.io, loadPath, self.gfx.alloc, .unlimited, std.mem.Alignment.of(u32), null);
+    defer self.gfx.alloc.free(code);
+    const spvCode = std.mem.bytesAsSlice(u32, code);
+
+    const shader = try vk.Shader.initCode(self.gfx, spvCode, loadPath);
+
+    _ = try spv.reflect(spvCode, reflection);
+
+    return shader;
+}
+
+pub fn loadGraphicsPipeline(self: *Self, path: []const u8, state: *const vk.Pipeline.GraphicsState) !Pipeline {
+    var pipeline: Pipeline = undefined;
+    pipeline.reflection = try types.TypeRegistry.init(self.gfx.alloc);
+    errdefer pipeline.reflection.deinit();
+
+    var shaderMesh = try loadShader(self, path, ".mesh.spv", &pipeline.reflection);
     defer shaderMesh.deinit(self.gfx);
 
-    var shaderFrag = frag: {
-        const fragName = try std.mem.joinZ(self.gfx.alloc, "", &[_][]const u8{ path, ".frag.spv" });
-        defer self.gfx.alloc.free(fragName);
-        break :frag try vk.Shader.init(self.gfx, fragName);
-    };
+    var shaderFrag = try loadShader(self, path, ".frag.spv", &pipeline.reflection);
     defer shaderFrag.deinit(self.gfx);
 
-    const pipeline = try vk.Pipeline.initGraphics(self.gfx, &shaderMesh, &shaderFrag, state, path);
+    pipeline.pipeline = try vk.Pipeline.initGraphics(self.gfx, &shaderMesh, &shaderFrag, state, path);
+    pipeline.pushType = pipeline.reflection.find("constants").?;
     return pipeline;
 }
 
-pub fn loadComputePipeline(self: *Self, path: []const u8) !vk.Pipeline {
-    var shaderCompute = compute: {
-        const computeName = try std.mem.joinZ(self.gfx.alloc, "", &[_][]const u8{ path, ".comp.spv" });
-        defer self.gfx.alloc.free(computeName);
-        break :compute try vk.Shader.init(self.gfx, computeName);
-    };
+pub fn loadComputePipeline(self: *Self, path: []const u8) !Pipeline {
+    var pipeline: Pipeline = undefined;
+    pipeline.reflection = try types.TypeRegistry.init(self.gfx.alloc);
+    errdefer pipeline.reflection.deinit();
+
+    var shaderCompute = try loadShader(self, path, ".comp.spv", &pipeline.reflection);
     defer shaderCompute.deinit(self.gfx);
 
-    const pipeline = try vk.Pipeline.initCompute(self.gfx, &shaderCompute, path);
+    pipeline.pipeline = try vk.Pipeline.initCompute(self.gfx, &shaderCompute, path);
     return pipeline;
 }

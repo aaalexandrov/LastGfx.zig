@@ -1,6 +1,5 @@
 const std = @import("std");
 const c = @import("c");
-const SpirvReflect = @import("spirv_reflect.zig");
 
 fn DebugCallback(severity: c.VkDebugUtilsMessageSeverityFlagBitsEXT, msgType: c.VkDebugUtilsMessageTypeFlagsEXT, cbData: [*c]const c.VkDebugUtilsMessengerCallbackDataEXT, userData: ?*anyopaque) callconv(.c) c.VkBool32 {
     _ = userData;
@@ -856,41 +855,31 @@ pub const Swapchain = struct {
 
 pub const Shader = struct {
     handle: c.VkShaderModule = null,
-    filename: [:0]const u8 = "",
+    name: []const u8 = "",
 
     pub const Self = @This();
 
-    pub fn init(gfx: *Gfx, filename: [:0]const u8) !Self {
-        var exePathBuf: [std.fs.max_path_bytes]u8 = undefined;
-        const exePathLen = try std.process.executableDirPath(gfx.io, &exePathBuf);
-        const exePath = exePathBuf[0..exePathLen];
-        const relativePath = try std.fs.path.join(gfx.alloc, &.{ exePath, filename });
-        defer gfx.alloc.free(relativePath);
-        const code = try std.Io.Dir.cwd().readFileAllocOptions(gfx.io, relativePath, gfx.alloc, .unlimited, std.mem.Alignment.of(u32), null);
+    pub fn init(gfx: *Gfx, filename: []const u8) !Self {
+        const code = try std.Io.Dir.cwd().readFileAllocOptions(gfx.io, filename, gfx.alloc, .unlimited, std.mem.Alignment.of(u32), null);
         defer gfx.alloc.free(code);
         std.debug.assert(code.len % 4 == 0);
 
-        var refl: SpirvReflect = undefined;
-        try refl.init(gfx.alloc, filename, code);
-        defer refl.deinit();
-
-        var self = try initCode(gfx, @as([*]const u32, @ptrCast(@alignCast(code.ptr)))[0..(code.len)]);
-        self.filename = try gfx.alloc.dupeZ(u8, filename);
+        const self = try initCode(gfx, @as([*]const u32, @ptrCast(@alignCast(code.ptr)))[0..code.len / 4], filename);
         return self;
     }
 
-    pub fn initCode(gfx: *Gfx, code: []const u32) !Self {
-        var self = Self{};
+    pub fn initCode(gfx: *Gfx, code: []const u32, name: []const u8) !Self {
+        var self = Self{.name = try gfx.alloc.dupe(u8, name)};
         try check(c.vkCreateShaderModule(gfx.device.handle, &c.VkShaderModuleCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
             .pCode = code.ptr,
-            .codeSize = code.len,
+            .codeSize = code.len * @sizeOf(u32),
         }, gfx.allocCB, &self.handle));
         return self;
     }
 
     pub fn deinit(self: *Self, gfx: *Gfx) void {
-        gfx.alloc.free(self.filename);
+        gfx.alloc.free(self.name);
         c.vkDestroyShaderModule(gfx.device.handle, self.handle, gfx.allocCB);
     }
 };

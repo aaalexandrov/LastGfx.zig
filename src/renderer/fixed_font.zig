@@ -142,7 +142,7 @@ pub fn render(self: *Self, str: []const u8, startPos: [2]f32, pixelSize: [2]f32,
         pos[0] += quadSize[0];
     }
     
-    submit.cmds.bindRenderPipeline(Self.pipeline.data().?);
+    submit.cmds.bindRenderPipeline(&Self.pipeline.data().?.pipeline);
 
     submit.cmds.pushData(&buffer.deviceAddress());
     submit.cmds.drawMeshTasks(@intCast((str.len + 31) / 32), 1, 1);

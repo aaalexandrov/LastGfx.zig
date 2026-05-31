@@ -131,6 +131,10 @@ pub const TypeRegistry = struct {
         self.types.deinit(self.alloc);
     }
 
+    pub fn find(self: *Self, name: []const u8) ?*TypeInfo {
+        return self.types.get(name);
+    }
+
     pub fn get(self: *Self, comptime T: type) error{OutOfMemory}!*const TypeInfo {
         const entry = try self.types.getOrPut(self.alloc, @typeName(T));
         if (entry.found_existing)
@@ -149,7 +153,7 @@ pub const TypeRegistry = struct {
             return error.TypeAlreadyExists;
         entry.key_ptr.* = try self.alloc.dupe(u8, name);
         entry.value_ptr.* = try self.alloc.create(TypeInfo);
-        try entry.value_ptr.*.initEmpty(name);
+        try entry.value_ptr.*.initEmpty(entry.key_ptr.*);
         return entry.value_ptr.*;
     }
 };
