@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="BuildScanner">
+    <option name="projects">
+      <list><![CDATA[{
+  "name": "LastGfx_zig",
+  "version": "0.0.0",
+  "path": "/home/alex/LastGfx.zig",
+  "steps": [
+    {
+      "name": "install",
+      "description": "Copy build artifacts to prefix path",
+      "kind": "top_level"
+    },
+    {
+      "name": "uninstall",
+      "description": "Remove build artifacts from prefix path",
+      "kind": "uninstall"
+    },
+    {
+      "name": "Install SPV",
+      "description": "ditto",
+      "kind": "install_file"
+    },
+    {
+      "name": "run",
+      "description": "Run the app",
+      "kind": "run"
+    },
+    {
+      "name": "test",
+      "description": "Run unit tests",
+      "kind": "run"
+    }
+  ],
+  "modules": [
+    {
+      "root": "src/main.zig",
+      "public": false,
+      "imports": []
+    }
+  ],
+  "dependencies": []
+}]]><![CDATA[{
+  "name": "sdl",
+  "version": "0.2.6+3.2.20",
+  "path": "/home/alex/LastGfx.zig/zig-pkg/sdl-0.2.6+3.2.20-7uIn9NgjfwHH5a6HhyLHat2nHU3OP5B05QHhKJKuxEex",
+  "steps": [
+    {
+      "name": "install",
+      "description": "Copy build artifacts to prefix path",
+      "kind": "install_artifact"
+    },
+    {
+      "name": "uninstall",
+      "description": "Remove build artifacts from prefix path",
+      "kind": "uninstall"
+    },
+    {
+      "name": "install_sdl",
+      "description": "Install SDL",
+      "kind": "install_artifact"
+    },
+    {
+      "name": "install_sdl_test",
+      "description": "Install SDL_test",
+      "kind": "install_artifact"
+    }
+  ],
+  "modules": [
+    {
+      "root": "<null>",
+      "public": false,
+      "imports": []
+    },
+    {
+      "root": "<null>",
+      "public": false,
+      "imports": []
+    }
+  ],
+  "dependencies": []
+}]]><![CDATA[{
+  "name": "sdl_linux_deps",
+  "version": "0.0.0",
+  "path": "/home/alex/LastGfx.zig/zig-pkg/sdl_linux_deps-0.0.0-Vy5_h4AlfwBtG7MIPe7ZNUANhmYLek_SA140uYk9SrED",
+  "steps": [
+    {
+      "name": "install",
+      "description": "Copy build artifacts to prefix path",
+      "kind": "uninstall"
+    },
+    {
+      "name": "uninstall",
+      "description": "Remove build artifacts from prefix path",
+      "kind": "uninstall"
+    }
+  ],
+  "modules": [],
+  "dependencies": []
+}]]></list>
+    </option>
+  </component>
+  <component name="ZigToolchain" toolchain="8735f601-0935-40dd-bff5-08688cd79c89" />
+</project>
