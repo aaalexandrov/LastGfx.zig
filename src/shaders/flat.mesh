@@ -15,7 +15,7 @@ layout(triangles, max_vertices = WORKGROUP_SIZE*3, max_primitives = WORKGROUP_SI
 void main()
 {
     uint triIndex = gl_GlobalInvocationID.x;
-    uint numTriangles = pushData.inputData.data.numTriangles;
+    uint numTriangles = pushData.inputData.numTriangles;
     if (triIndex >= numTriangles)
         return;
     
@@ -23,11 +23,11 @@ void main()
     uint workgroupTris = min(WORKGROUP_SIZE, numTriangles - baseTri);
     SetMeshOutputsEXT(3 * workgroupTris, workgroupTris);
 
-    PositionData meshPositions = pushData.inputData.data.meshPositions;
-    IndexData meshTriangles = pushData.inputData.data.meshTriangles;
+    PositionData meshPositions = pushData.inputData.positions;
+    IndexData meshTriangles = pushData.inputData.triangles; 
 
-    mat4 world = pushData.inputData.data.world;
-    mat4 viewProj = pushData.inputData.data.proj * pushData.inputData.data.view;
+    mat4 world = pushData.inputData.world;
+    mat4 viewProj = pushData.inputData.proj * pushData.inputData.view; 
 
     vec3 pos[3];
 

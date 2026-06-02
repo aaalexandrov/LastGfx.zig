@@ -61,11 +61,11 @@ pub fn getIndicesSize(self: *Self) u64 {
 }
 
 pub fn getVerticesOffset(self: *Self) u64 {
-    return self.getIndicesSize();
+    _ = self;
+    return 0;
 }
 
 pub fn getIndicesOffset(self: *Self) u64 {
-    _ = self;
-    return 0;
+    return self.getVerticesSize();
 }
 

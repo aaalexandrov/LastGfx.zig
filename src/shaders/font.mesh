@@ -11,7 +11,7 @@ layout(triangles, max_vertices = 128, max_primitives = 64) out;
 void main()
 {
     uint charIndex = gl_GlobalInvocationID.x;
-    uint numCharacters = pushData.inputData.data.numCharacters;
+    uint numCharacters = pushData.inputData.numCharacters;
 
     if (charIndex >= numCharacters)
         return;
@@ -22,7 +22,7 @@ void main()
         SetMeshOutputsEXT(vertexCount, triangleCount);  
     }
 
-    vec2 quadSize = pushData.inputData.data.quadSize;
+    vec2 quadSize = pushData.inputData.quadSize;
 
     CharData ch = pushData.inputData.characters[charIndex];
 

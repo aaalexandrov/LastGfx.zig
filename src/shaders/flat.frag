@@ -10,15 +10,13 @@ layout (location = 0) out vec4 color;
 
 void main()
 {
-    MaterialProperties material = pushData.inputData.data.material;
-    DirectionalLight light = pushData.inputData.data.light;
-    vec3 environmentColor = pushData.inputData.data.environmentColor;
+    MaterialProperties material = pushData.inputData.material;
+    DirectionalLight light = pushData.inputData.light;
+    vec3 environmentColor = pushData.inputData.environmentColor;
 
     float nd = dot(normal, light.direction);
 
-    uint albedoIndex = pushData.inputData.data.material.albedoIndex;
-    uint samplerIndex = pushData.inputData.data.material.samplerIndex;
-    vec4 albedo = texture(sampler2D(heapTexture2D[albedoIndex], heapSampler[samplerIndex]), uv);
+    vec4 albedo = texture(sampler2D(heapTexture2D[material.albedo.index], heapSampler[material.textureSampler.index]), uv); 
 
     /*
     vec3 cameraPos = pushData.inputData.data.cameraPos;

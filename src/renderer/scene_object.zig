@@ -23,8 +23,8 @@ pub const BufferData = extern struct {
     view: Mat4f.Simd,
     proj: Mat4f.Simd,
 
-    meshPositions: c.VkDeviceAddress,
-    meshTriangles: c.VkDeviceAddress,
+    positions: c.VkDeviceAddress,
+    triangles: c.VkDeviceAddress,
 
     cameraPos: [3]f32,
     numTriangles: u32,
@@ -56,11 +56,11 @@ pub fn render(self: *Self, scene: *Scene, submit: *r.SubmitInfo) !void {
 
     const mesh = self.mesh.data().?;
     const numTriangles = mesh.numIndices / 3;
-    data.meshPositions = mesh.buffer.deviceAddress + mesh.getVerticesOffset();
-    data.meshTriangles = mesh.buffer.deviceAddress + mesh.getIndicesOffset();
+    data.positions = mesh.buffer.deviceAddress + mesh.getVerticesOffset();
+    data.triangles = mesh.buffer.deviceAddress + mesh.getIndicesOffset();
+    data.numTriangles = numTriangles;
 
     data.cameraPos = Vec4f.toDim(3, scene.camera.getPos(), 0);
-    data.numTriangles = numTriangles;
 
     const material = self.material.data().?;
     data.material = material.properties;
