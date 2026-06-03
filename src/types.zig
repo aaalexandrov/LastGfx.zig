@@ -81,6 +81,19 @@ pub const TypeInfo = struct {
         self.info.deinit(registry);
     }
 
+    pub fn getMember(self: *const Self, name: []const u8) ?*const Member {
+        switch (self.info) {
+            .Struct => |str| {
+                for (str.members) |*member| {
+                    if (std.mem.eql(u8, name, member.name))
+                        return member;
+                }
+            },
+            else => {},
+        }
+        return null;
+    }
+
     pub fn dump(self: *const Self, depth: u32) void {
         const maxDepth = 16;
         if (depth > maxDepth)
@@ -155,5 +168,80 @@ pub const TypeRegistry = struct {
         entry.value_ptr.* = try self.alloc.create(TypeInfo);
         try entry.value_ptr.*.initEmpty(entry.key_ptr.*);
         return entry.value_ptr.*;
+    }
+};
+
+pub const AnyPtr = struct {
+    typeInfo: *const TypeInfo = null,
+    ptr: [*]u8 = null,
+
+    pub const Self = @This();
+    pub fn init(typeInfo: *const TypeInfo, ptr: [*]u8) Self {
+        return Self { 
+            .typeInfo = typeInfo, 
+            .ptr = ptr,
+        };
+    }
+
+    pub fn initT(T: type, registry: *TypeRegistry, obj: *T) Self {
+        return Self {
+            .typeInfo = registry.get(T),
+            .ptr = @ptrCast(obj),
+        };
+    }
+
+    pub fn get(self: *Self, typeInfo: *const TypeInfo) ?[*]u8 {
+        return if (typeInfo == self.typeInfo)
+                self.ptr 
+            else 
+                null;
+    }
+
+    pub fn getT(self: *Self, T: type, registry: *TypeRegistry) ?*T {
+        return @ptrCast(self.get(registry.get(T)));
+    }
+
+    pub fn dereference(self: *Self) ?Self {
+        if (self.ptr != null and self.typeInfo.info == .Pointer) {
+            return .{
+                .typeInfo = self.typeInfo.info.Pointer.pointedType,
+                .ptr = std.mem.bytesToValue([*]u8, self.ptr[0..@sizeOf([*]u8)]),
+            };
+        }
+        return null;
+    }
+
+    pub fn getMember(self: *Self, name: []const u8) ?Self {
+        if (self.typeInfo.getMember(name)) |member| {
+            return Self{
+                .typeInfo = member.typeInfo,
+                .ptr = self.ptr + member.offset,
+            };
+        }
+        return null;
+    }
+
+    pub fn getArrayLen(self: *Self) ?usize {
+        switch (self.typeInfo.info) {
+            .Array => |arr| 
+                return arr.length,
+            else => {},
+        }
+        return null;
+    }
+
+    pub fn getArrayElement(self: *Self, n: usize) ?Self {
+        switch (self.typeInfo.info) {
+            .Array => |arr| {
+                if (n < arr.length) {
+                    return Self{
+                        .typeInfo = arr.elementType,
+                        .ptr = self.ptr + n * arr.elementType.size,
+                    };
+                }
+            },
+            else => {},
+        }
+        return null;
     }
 };
