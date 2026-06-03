@@ -6,20 +6,12 @@ const types = @import("../types.zig");
 
 pub const Rc = rc.SharedPtr(Self, Self);
 
-pub const Properties = extern struct {
-    color: [3]f32 = .{1, 1, 1},
-    roughness: f32 = 0.5,
-    metallic: f32 = 0.1,
-    albedoIndex: u32 = 0,
-    samplerIndex: u32 = 0,
-};
-
 pipeline: r.RcPipeline = .{},
-properties: Properties = .{},
 
 propertiesType: ?*const types.TypeInfo = null,
-propertiesBuffer: []u8 = &.{},
+propertiesBuffer: []align(PropertiesAlignment) u8 = &.{},
 
+pub const PropertiesAlignment = 16;
 pub const Self = @This();
 
 pub fn init(self: *Self) void {
@@ -46,14 +38,15 @@ pub fn getProperties(self: *Self) ?types.AnyPtr {
     return null;
 }
 
-pub fn setPipeline(self: *Self, pipeline: *r.RcPipeline, alloc: std.mem.Allocator) void {
+pub fn setPipeline(self: *Self, pipeline: *r.RcPipeline, alloc: std.mem.Allocator) !void {
     self.freeProperties(alloc);
     self.pipeline.assign(pipeline, alloc);
     if (self.pipeline.data()) |pipe| {
-        if (pipe.pushType.getMember("material")) |materialMember| {
-            self.propertiesType = materialMember.typeInfo;
-            std.debug.assert(materialMember.typeInfo.alignment <= 16);
-            self.propertiesBuffer = try alloc.alignedAlloc(u8, 16, materialMember.typeInfo.size);
+        if (pipe.reflection.find("MaterialProperties")) |materialPropsType| {
+            self.propertiesType = materialPropsType;
+            std.debug.assert(materialPropsType.alignment <= 16);
+            const propsAlignment = comptime std.mem.Alignment.fromByteUnits(PropertiesAlignment);
+            self.propertiesBuffer = try alloc.alignedAlloc(u8, propsAlignment, materialPropsType.size);
             @memset(self.propertiesBuffer, 0);
         }
     }

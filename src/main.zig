@@ -230,9 +230,14 @@ fn initScene(scene: *Scene, upload: *r.SubmitInfo, albedo: vk.HeapDescriptor, sa
     try materialFlat.allocate(scene.alloc(), .{});
     defer materialFlat.clear(scene.alloc());
 
-    materialFlat.data().?.pipeline.assign(&pipelineFlat, scene.alloc());
-    materialFlat.data().?.properties.albedoIndex = albedo.index;
-    materialFlat.data().?.properties.samplerIndex = sampler.index;
+    try materialFlat.data().?.setPipeline(&pipelineFlat, scene.alloc());
+
+    var materialProps = materialFlat.data().?.getProperties().?;
+    materialProps.getMember("color").?.getT([3]f32).?.* = .{1, 1, 1};
+    materialProps.getMember("roughness").?.getT(f32).?.* = 0.5;
+    materialProps.getMember("metallic").?.getT(f32).?.* = 0.1;
+    materialProps.getMember("albedo").?.getMember("index").?.getT(u32).?.* = albedo.index;
+    materialProps.getMember("textureSampler").?.getMember("index").?.getT(u32).?.* = sampler.index;
 
     const cubeVerts: [8][3]f32 = .{
         .{ -1, -1, -1 },

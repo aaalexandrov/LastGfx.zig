@@ -3,6 +3,7 @@ const c = @import("c");
 const rc = @import("../rc_ptr.zig");
 const r = @import("renderer.zig");
 const Scene = @import("scene.zig");
+const types = @import("../types.zig");
 
 const Material = @import("material.zig");
 const Mesh = @import("mesh.zig");
@@ -18,23 +19,6 @@ transform: Mat4f.Simd = Mat4f.diag(1),
 material: Material.Rc = .{},
 mesh: Mesh.Rc = .{},
 
-pub const BufferData = extern struct {
-    world: Mat4f.Simd,
-    view: Mat4f.Simd,
-    proj: Mat4f.Simd,
-
-    positions: c.VkDeviceAddress,
-    triangles: c.VkDeviceAddress,
-
-    cameraPos: [3]f32,
-    numTriangles: u32,
-
-    material: Material.Properties,
-    light: Light.Properties,
-    environmentColor: [3]f32,
-};
-
-
 pub const Self = @This();
 
 pub fn init(self: *@This()) void {
@@ -47,25 +31,28 @@ pub fn deinit(self: *@This(), alloc_: std.mem.Allocator) void {
 }
 
 pub fn render(self: *Self, scene: *Scene, submit: *r.SubmitInfo) !void {
-    const staging = try submit.staging.alloc(@sizeOf(BufferData), @alignOf(BufferData));
-    const data: *BufferData = @ptrCast(@alignCast(staging.slice()));
+    const material = self.material.data().?;
+    const pushType = material.pipeline.data().?.pushType;
+    const bufferType = pushType.getMember("inputData").?.typeInfo.info.Pointer.pointedType;
 
-    data.world = self.transform;
-    data.view = try scene.camera.getViewMatrix();
-    data.proj = scene.camera.getProjectionMatrix();
+    const staging = try submit.staging.alloc(bufferType.size, Material.PropertiesAlignment);
+    const data = types.AnyPtr.init(bufferType, staging.slice().ptr);
+
+    @memcpy(data.getMember("world").?.slice(), std.mem.asBytes(&self.transform));
+    @memcpy(data.getMember("view").?.slice(), std.mem.asBytes(&try scene.camera.getViewMatrix()));
+    @memcpy(data.getMember("proj").?.slice(), std.mem.asBytes(&scene.camera.getProjectionMatrix()));
 
     const mesh = self.mesh.data().?;
     const numTriangles = mesh.numIndices / 3;
-    data.positions = mesh.buffer.deviceAddress + mesh.getVerticesOffset();
-    data.triangles = mesh.buffer.deviceAddress + mesh.getIndicesOffset();
-    data.numTriangles = numTriangles;
+    @memcpy(data.getMember("positions").?.slice(), &std.mem.toBytes(mesh.buffer.deviceAddress + mesh.getVerticesOffset()));
+    @memcpy(data.getMember("triangles").?.slice(), &std.mem.toBytes(mesh.buffer.deviceAddress + mesh.getIndicesOffset()));
+    data.getMember("numTriangles").?.getT(u32).?.* = numTriangles;
 
-    data.cameraPos = Vec4f.toDim(3, scene.camera.getPos(), 0);
+    data.getMember("cameraPos").?.getT([3]f32).?.* = Vec4f.toDim(3, scene.camera.getPos(), 0);
 
-    const material = self.material.data().?;
-    data.material = material.properties;
-    data.light = scene.light.properties;
-    data.environmentColor = scene.environmentColor;
+    @memcpy(data.getMember("material").?.slice(), material.propertiesBuffer);
+    @memcpy(data.getMember("light").?.slice(), std.mem.asBytes(&scene.light.properties));
+    data.getMember("environmentColor").?.getT([3]f32).?.* = scene.environmentColor;
 
     submit.cmds.pushData(&staging.deviceAddress());
 

@@ -7,7 +7,7 @@ const spv = @import("../spirv_reflect.zig");
 
 pub const Pipeline = struct {
     pipeline: vk.Pipeline,
-    pushType: *types.TypeInfo,
+    pushType: *const types.TypeInfo,
     reflection: types.TypeRegistry,
 
     pub fn deinit(self: *@This()) void {

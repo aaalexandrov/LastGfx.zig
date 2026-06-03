@@ -172,8 +172,8 @@ pub const TypeRegistry = struct {
 };
 
 pub const AnyPtr = struct {
-    typeInfo: *const TypeInfo = null,
-    ptr: [*]u8 = null,
+    typeInfo: *const TypeInfo,
+    ptr: [*]u8,
 
     pub const Self = @This();
     pub fn init(typeInfo: *const TypeInfo, ptr: [*]u8) Self {
@@ -183,25 +183,32 @@ pub const AnyPtr = struct {
         };
     }
 
-    pub fn initT(T: type, registry: *TypeRegistry, obj: *T) Self {
+    pub fn initT(T: type, registry: *TypeRegistry, obj: *T) !Self {
         return Self {
-            .typeInfo = registry.get(T),
+            .typeInfo = try registry.get(T),
             .ptr = @ptrCast(obj),
         };
     }
 
-    pub fn get(self: *Self, typeInfo: *const TypeInfo) ?[*]u8 {
+    pub fn slice(self: *const Self) []u8 {
+        return self.ptr[0..self.typeInfo.size];
+    }
+
+    pub fn get(self: *const Self, typeInfo: *const TypeInfo) ?[*]u8 {
         return if (typeInfo == self.typeInfo)
                 self.ptr 
             else 
                 null;
     }
 
-    pub fn getT(self: *Self, T: type, registry: *TypeRegistry) ?*T {
-        return @ptrCast(self.get(registry.get(T)));
+    pub fn getT(self: *const Self, T: type) ?*T {
+        return if (std.mem.eql(u8, @typeName(T), self.typeInfo.name))
+               @ptrCast(@alignCast(self.ptr))
+            else
+                null;
     }
 
-    pub fn dereference(self: *Self) ?Self {
+    pub fn dereference(self: *const Self) ?Self {
         if (self.ptr != null and self.typeInfo.info == .Pointer) {
             return .{
                 .typeInfo = self.typeInfo.info.Pointer.pointedType,
@@ -211,7 +218,7 @@ pub const AnyPtr = struct {
         return null;
     }
 
-    pub fn getMember(self: *Self, name: []const u8) ?Self {
+    pub fn getMember(self: *const Self, name: []const u8) ?Self {
         if (self.typeInfo.getMember(name)) |member| {
             return Self{
                 .typeInfo = member.typeInfo,
@@ -221,7 +228,7 @@ pub const AnyPtr = struct {
         return null;
     }
 
-    pub fn getArrayLen(self: *Self) ?usize {
+    pub fn getArrayLen(self: *const Self) ?usize {
         switch (self.typeInfo.info) {
             .Array => |arr| 
                 return arr.length,
@@ -230,7 +237,7 @@ pub const AnyPtr = struct {
         return null;
     }
 
-    pub fn getArrayElement(self: *Self, n: usize) ?Self {
+    pub fn getArrayElement(self: *const Self, n: usize) ?Self {
         switch (self.typeInfo.info) {
             .Array => |arr| {
                 if (n < arr.length) {
