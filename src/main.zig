@@ -220,9 +220,20 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn initScene(scene: *Scene, upload: *r.SubmitInfo, albedo: vk.HeapDescriptor, sampler: vk.HeapDescriptor) !void {
-    var pipelineFlat = try scene.renderer.pipelines.getPipeline(&.{ .name = "shaders/flat", .data = .{ .graphics = .{ .cullMode = c.VK_CULL_MODE_BACK_BIT, .depthWrite = true, .depthCompareOp = c.VK_COMPARE_OP_LESS, .depthAttachmentFormat = c.VK_FORMAT_D32_SFLOAT, .colorAttachments = @constCast(&[_]vk.Pipeline.GraphicsState.ColorAttachment{.{
-        .format = scene.renderer.gfx.swapchainFormat,
-    }}) } } });
+    var pipelineFlat = try scene.renderer.pipelines.getPipeline(&.{ 
+        .name = "shaders/flat", 
+        .data = .{ 
+            .graphics = .{ 
+                .cullMode = c.VK_CULL_MODE_BACK_BIT, 
+                .depthWrite = true, 
+                .depthCompareOp = c.VK_COMPARE_OP_LESS, 
+                .depthAttachmentFormat = c.VK_FORMAT_D32_SFLOAT, 
+                .colorAttachments = @constCast(&[_]vk.Pipeline.GraphicsState.ColorAttachment{.{
+                    .format = scene.renderer.gfx.swapchainFormat,
+                }})
+            } 
+        } 
+    });
     defer pipelineFlat.clear(scene.alloc());
 
     const Material = @import("renderer/material.zig");

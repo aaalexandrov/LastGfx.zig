@@ -26,23 +26,6 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    const windowsVulkanSDKPath = 
-        if (target.result.os.tag == .windows) 
-            b.graph.environ_map.get("VK_SDK_PATH")
-        else
-            null;
-
-    const translate_c = b.addTranslateC(.{
-        .root_source_file = b.path("src/cimport/c.h"),
-        .target = target,
-        .optimize = optimize,
-    });
-    if (windowsVulkanSDKPath) |path| {
-        translate_c.addIncludePath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}/include", .{path}) });
-        translate_c.addIncludePath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}/include/vma", .{path}) });
-    }
-    exe_mod.addImport("c", translate_c.createModule());
-
     const sdl_dep = b.dependency("sdl", .{
         .target = target,
         .optimize = optimize,
@@ -57,10 +40,29 @@ pub fn build(b: *std.Build) !void {
     const sdl_lib = sdl_dep.artifact("SDL3");
     exe_mod.linkLibrary(sdl_lib);
 
-    exe_mod.addCSourceFile(.{.file = .{ .cwd_relative = "./src/cimport/vk_mem_alloc.cpp" }});
-    exe_mod.addCSourceFile(.{.file = .{ .cwd_relative = "./src/cimport/stb_image.c" }});
-    exe_mod.addCSourceFile(.{.file = .{ .cwd_relative = "./src/cimport/spirv_reflect.c" }});
+    exe_mod.addCSourceFile(.{ .file = .{ .cwd_relative = "./src/cimport/vk_mem_alloc.cpp" } });
+    exe_mod.addCSourceFile(.{ .file = .{ .cwd_relative = "./src/cimport/stb_image.c" } });
+    exe_mod.addCSourceFile(.{ .file = .{ .cwd_relative = "./src/cimport/spirv_reflect.c" } });
     exe_mod.link_libcpp = true;
+
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = b.path("src/cimport/c.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    translate_c.addIncludePath(sdl_dep.path("include"));
+
+    const windowsVulkanSDKPath =
+        if (target.result.os.tag == .windows)
+            b.graph.environ_map.get("VK_SDK_PATH")
+        else
+            null;
+    if (windowsVulkanSDKPath) |path| {
+        translate_c.addIncludePath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}/include", .{path}) });
+        translate_c.addIncludePath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}/include/vma", .{path}) });
+    }
+    exe_mod.addImport("c", translate_c.createModule());
 
     if (windowsVulkanSDKPath) |path| {
         exe_mod.addLibraryPath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}/lib", .{path}) });
@@ -103,7 +105,7 @@ pub fn build(b: *std.Build) !void {
     // This is not necessary, however, if the application depends on other installed
     // files, this ensures they will be present and in the expected location.
     run_cmd.step.dependOn(b.getInstallStep());
-    run_cmd.setCwd(.{.cwd_relative = b.exe_dir});
+    run_cmd.setCwd(.{ .cwd_relative = b.exe_dir });
 
     // This allows the user to pass arguments to the application in the build
     // command itself, like this: `zig build run -- arg1 arg2 etc`
@@ -152,7 +154,7 @@ fn compileShaders(b: *std.Build, srcPath: []const u8, dstPath: []const u8) !void
 
             cmd.has_side_effects = false;
 
-            const inst = b.addInstallFile(spvPath, b.pathJoin(&.{ out_path }));
+            const inst = b.addInstallFile(spvPath, b.pathJoin(&.{out_path}));
             inst.step.dependOn(&cmd.step);
             installStep.dependOn(&inst.step);
         }

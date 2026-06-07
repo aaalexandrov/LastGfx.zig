@@ -1,9 +1,52 @@
 const std = @import("std");
 
+pub const NamedMetadata = struct {
+    map: MetadataMap = .{},
+
+    pub const MetadataValue = AnyValue(2 * @sizeOf([*]u8), @alignOf([*]u8));
+    pub const MetadataMap = std.StringHashMapUnmanaged(MetadataValue);
+    pub const Self = @This();
+
+    pub fn deinit(self: *Self, registry: *TypeRegistry) void {
+        var it = self.map.iterator();
+        while (it.next()) |entry| {
+            registry.alloc.free(entry.key_ptr.*);
+            entry.value_ptr.deinit(registry);
+        }
+        self.map.deinit(registry.alloc);
+    }
+
+    pub fn add(self: *Self, name: []const u8, typeInfo: *const TypeInfo, registry: *TypeRegistry) !*MetadataValue {
+        const result = try self.map.getOrPut(registry.alloc, name);
+        if (result.found_existing)
+            return error.AlreadyExists;
+        result.key_ptr.* = try registry.alloc.dupe(u8, name);
+        result.value_ptr.*.init(typeInfo, registry.alloc);
+        return result.value_ptr;
+    }
+
+    pub fn addT(self: *Self, comptime T: type, name: []const u8, registry: *TypeRegistry) !*MetadataValue {
+        return try self.add(name, try registry.get(T), registry);
+    }
+
+    pub fn contains(self: *const Self, name: []const u8) bool {
+        return self.map.contains(name);
+    }
+
+    pub fn get(self: *const Self, name: []const u8) ?AnyPtr {
+        const entry = self.map.getEntry(name);
+        return if (entry) |ent|
+                ent.value_ptr.*.ptr()
+            else
+                null;
+    }
+};
+
 pub const TypeInfo = struct {
     name: []const u8,
     size: usize,
     alignment: usize,
+    metadata: NamedMetadata,
     info: Info,
 
     pub const Info = union(enum) {
@@ -35,9 +78,11 @@ pub const TypeInfo = struct {
         name: []const u8,
         offset: usize,
         typeInfo: *const TypeInfo,
+        metadata: NamedMetadata,
 
         fn deinit(self: *@This(), registry: *TypeRegistry) void {
             registry.alloc.free(self.name);
+            self.metadata.deinit(registry);
         }
     };
 
@@ -47,6 +92,7 @@ pub const TypeInfo = struct {
         self.name = name;
         self.size = 0;
         self.alignment = 0;
+        self.metadata = .{};
         self.info = .Basic;
     }
 
@@ -54,11 +100,12 @@ pub const TypeInfo = struct {
         self.name = name;
         self.size = @sizeOf(T);
         self.alignment = @alignOf(T);
+        self.metadata = .{};
         self.info = switch (@typeInfo(T)) {
-            .array => |arr| .{.Array = .{
+            .array => |arr| .{ .Array = .{
                 .length = arr.len,
                 .elementType = try registry.get(arr.child),
-            }},
+            } },
             .@"struct" => |str| blk: {
                 var members = try registry.alloc.alloc(Member, str.fields.len);
                 inline for (0..str.fields.len) |i| {
@@ -66,18 +113,20 @@ pub const TypeInfo = struct {
                         .name = try registry.alloc.dupe(u8, str.fields[i].name),
                         .offset = @offsetOf(T, str.fields[i].name),
                         .typeInfo = try registry.get(str.fields[i].type),
+                        .metadata = .{},
                     };
                 }
-                break :blk .{.Struct = .{.members = members}};
+                break :blk .{ .Struct = .{ .members = members } };
             },
-            .pointer => |ptr| .{.Pointer = .{
+            .pointer => |ptr| .{ .Pointer = .{
                 .pointedType = try registry.get(ptr.child),
-            }},
+            } },
             else => .Basic,
         };
     }
 
     fn deinit(self: *Self, registry: *TypeRegistry) void {
+        self.metadata.deinit(registry);
         self.info.deinit(registry);
     }
 
@@ -98,11 +147,11 @@ pub const TypeInfo = struct {
         const maxDepth = 16;
         if (depth > maxDepth)
             return;
-        const whitespace = (" " ** (2*(maxDepth+1)));
-        std.log.info("{s}Type {s}, size: {}, align: {}, kind: {s}", .{whitespace[0..depth*2], self.name, self.size, self.alignment, @tagName(self.info)});
+        const whitespace = (" " ** (2 * (maxDepth + 1)));
+        std.log.info("{s}Type {s}, size: {}, align: {}, kind: {s}", .{ whitespace[0 .. depth * 2], self.name, self.size, self.alignment, @tagName(self.info) });
         switch (self.info) {
             .Array => |arr| {
-                std.log.info("{s}len: {}", .{whitespace[0..(depth+1)*2], arr.length});
+                std.log.info("{s}len: {}", .{ whitespace[0 .. (depth + 1) * 2], arr.length });
                 arr.elementType.dump(depth + 2);
             },
             .Pointer => |ptr| {
@@ -110,7 +159,7 @@ pub const TypeInfo = struct {
             },
             .Struct => |str| {
                 for (str.members) |*member| {
-                    std.log.info("{s}member name: {s}, offset: {}", .{whitespace[0..(depth+1)*2], member.name, member.offset});
+                    std.log.info("{s}member name: {s}, offset: {}", .{ whitespace[0 .. (depth + 1) * 2], member.name, member.offset });
                     member.typeInfo.dump(depth + 2);
                 }
             },
@@ -160,7 +209,7 @@ pub const TypeRegistry = struct {
         return typeInfo;
     }
 
-    pub fn getNew(self: *Self, name: []const u8) error{OutOfMemory, TypeAlreadyExists}!*TypeInfo {
+    pub fn getNew(self: *Self, name: []const u8) error{ OutOfMemory, TypeAlreadyExists }!*TypeInfo {
         const entry = try self.types.getOrPut(self.alloc, name);
         if (entry.found_existing)
             return error.TypeAlreadyExists;
@@ -177,14 +226,14 @@ pub const AnyPtr = struct {
 
     pub const Self = @This();
     pub fn init(typeInfo: *const TypeInfo, ptr: [*]u8) Self {
-        return Self { 
-            .typeInfo = typeInfo, 
+        return Self{
+            .typeInfo = typeInfo,
             .ptr = ptr,
         };
     }
 
     pub fn initT(T: type, registry: *TypeRegistry, obj: *T) !Self {
-        return Self {
+        return Self{
             .typeInfo = try registry.get(T),
             .ptr = @ptrCast(obj),
         };
@@ -196,16 +245,16 @@ pub const AnyPtr = struct {
 
     pub fn get(self: *const Self, typeInfo: *const TypeInfo) ?[*]u8 {
         return if (typeInfo == self.typeInfo)
-                self.ptr 
-            else 
-                null;
+            self.ptr
+        else
+            null;
     }
 
     pub fn getT(self: *const Self, T: type) ?*T {
         return if (std.mem.eql(u8, @typeName(T), self.typeInfo.name))
-               @ptrCast(@alignCast(self.ptr))
-            else
-                null;
+            @ptrCast(@alignCast(self.ptr))
+        else
+            null;
     }
 
     pub fn dereference(self: *const Self) ?Self {
@@ -230,8 +279,7 @@ pub const AnyPtr = struct {
 
     pub fn getArrayLen(self: *const Self) ?usize {
         switch (self.typeInfo.info) {
-            .Array => |arr| 
-                return arr.length,
+            .Array => |arr| return arr.length,
             else => {},
         }
         return null;
@@ -252,3 +300,59 @@ pub const AnyPtr = struct {
         return null;
     }
 };
+
+pub fn AnyValue(comptime size: usize, comptime alignment: usize) type {
+    comptime if (size < @sizeOf([*]u8)) 
+        unreachable;
+    comptime if (alignment < @alignOf([*]u8))
+        unreachable;
+    return struct {
+        typeInfo: *const TypeInfo,
+        value: [size]u8 align(alignment),
+
+        pub const Size = size;
+        pub const Alignment = alignment;
+        pub const Self = @This();
+
+        pub fn init(self: *Self, typeInfo: *const TypeInfo, alloc: std.mem.Allocator) !void {
+            self.typeInfo = typeInfo;
+            if (!self.inPlace()) {
+                const valuePtr: *[*]u8 = @ptrCast(&self.value);
+                valuePtr.* = try alloc.rawAlloc(
+                    typeInfo.size, 
+                    std.mem.Alignment.fromByteUnits(typeInfo.alignment), 
+                    @returnAddress()
+                );
+            }
+        }
+
+        pub fn initT(self: *Self, T: type, registry: *TypeRegistry) !void {
+            try self.init(try registry.get(T), registry.alloc);
+        }
+
+        pub fn deinit(self: *Self, registry: *TypeRegistry) void {
+            if (!self.inPlace()) {
+                const valuePtr: *[*]u8 = @ptrCast(&self.value);
+                registry.alloc.rawFree(
+                    valuePtr.*[0..self.typeInfo.size], 
+                    std.mem.Alignment.fromByteUnits(self.typeInfo.alignment), 
+                    @returnAddress()
+                );
+            }
+        }
+
+        pub fn ptr(self: *const Self) AnyPtr {
+            return AnyPtr.init(
+                self.typeInfo,
+                if (self.inPlace()) 
+                        &self.value
+                    else 
+                        @as(*[*]u8, @ptrCast(&self.value)).*
+            );
+        }
+
+        fn inPlace(self: *const Self) bool {
+            return self.typeInfo.size <= size and self.typeInfo.alignment <= alignment;
+        }
+    };
+}

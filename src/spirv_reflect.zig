@@ -64,6 +64,7 @@ fn parseVarType(reflVar: *c.SpvReflectBlockVariable, registry: *TypeRegistry) !*
             members[i].name = try registry.alloc.dupe(u8, std.mem.span(reflVar.members[i].name));
             members[i].typeInfo = try parseVarType(reflVar.members+i, registry);
             members[i].offset = reflVar.members[i].offset;
+            members[i].metadata = .{};
         }
         if (members.len > 0) {
             curType.?.size = members[members.len-1].offset + members[members.len-1].typeInfo.size;
