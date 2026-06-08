@@ -16,17 +16,19 @@ pub const NamedMetadata = struct {
         self.map.deinit(registry.alloc);
     }
 
-    pub fn add(self: *Self, name: []const u8, typeInfo: *const TypeInfo, registry: *TypeRegistry) !*MetadataValue {
+    pub fn add(self: *Self, name: []const u8, typeInfo: *const TypeInfo, value: ?[*]const u8, registry: *TypeRegistry) !*MetadataValue {
         const result = try self.map.getOrPut(registry.alloc, name);
         if (result.found_existing)
             return error.AlreadyExists;
         result.key_ptr.* = try registry.alloc.dupe(u8, name);
-        result.value_ptr.*.init(typeInfo, registry.alloc);
+        try result.value_ptr.*.init(typeInfo, registry.alloc);
+        if (value) |val|
+            @memcpy(result.value_ptr.*.value[0..typeInfo.size], val);
         return result.value_ptr;
     }
 
-    pub fn addT(self: *Self, comptime T: type, name: []const u8, registry: *TypeRegistry) !*MetadataValue {
-        return try self.add(name, try registry.get(T), registry);
+    pub fn addT(self: *Self, comptime T: type, name: []const u8, value: ?*const T, registry: *TypeRegistry) !*MetadataValue {
+        return try self.add(name, try registry.get(T), @ptrCast(value orelse null), registry);
     }
 
     pub fn contains(self: *const Self, name: []const u8) bool {
@@ -61,6 +63,10 @@ pub const TypeInfo = struct {
         Pointer: struct {
             pointedType: *const TypeInfo,
         },
+        Fn: struct {
+            returnType: *const TypeInfo,
+            paramTypes: []*const TypeInfo,
+        },
 
         fn deinit(self: *@This(), registry: *TypeRegistry) void {
             switch (self.*) {
@@ -68,6 +74,9 @@ pub const TypeInfo = struct {
                     for (str.members) |*member|
                         @as(*Member, @constCast(member)).deinit(registry);
                     registry.alloc.free(str.members);
+                },
+                .Fn => |func| {
+                    registry.alloc.free(func.paramTypes);
                 },
                 else => {},
             }
@@ -98,8 +107,14 @@ pub const TypeInfo = struct {
 
     fn initType(self: *Self, registry: *TypeRegistry, name: []const u8, comptime T: type) !void {
         self.name = name;
-        self.size = @sizeOf(T);
-        self.alignment = @alignOf(T);
+        self.size = switch (@typeInfo(T)) {
+            .@"fn", .@"opaque" => 0,
+            else => @sizeOf(T),
+        };
+        self.alignment = switch (@typeInfo(T)) {
+            .@"opaque" => 0,
+            else => @alignOf(T),
+        };
         self.metadata = .{};
         self.info = switch (@typeInfo(T)) {
             .array => |arr| .{ .Array = .{
@@ -121,6 +136,16 @@ pub const TypeInfo = struct {
             .pointer => |ptr| .{ .Pointer = .{
                 .pointedType = try registry.get(ptr.child),
             } },
+            .@"fn" => |func| blk: {
+                var params = try registry.alloc.alloc(*const TypeInfo, func.params.len);
+                inline for (0..func.params.len) |i| {
+                    params[i] = try registry.get(func.params[i].type.?);
+                }
+                break :blk .{.Fn = .{
+                    .returnType = try registry.get(func.return_type.?), 
+                    .paramTypes = params,
+                }};
+            },
             else => .Basic,
         };
     }
@@ -161,6 +186,14 @@ pub const TypeInfo = struct {
                 for (str.members) |*member| {
                     std.log.info("{s}member name: {s}, offset: {}", .{ whitespace[0 .. (depth + 1) * 2], member.name, member.offset });
                     member.typeInfo.dump(depth + 2);
+                }
+            },
+            .Fn => |func| {
+                std.log.info("{s}return type: ", .{ whitespace[0 .. (depth + 1) * 2] });
+                func.returnType.dump(depth + 2);
+                std.log.info("{s}param types: ", .{ whitespace[0 .. (depth + 1) * 2] });
+                for (func.paramTypes) |paramType| {
+                    paramType.dump(depth + 2);
                 }
             },
             .Basic => {},
@@ -318,11 +351,11 @@ pub fn AnyValue(comptime size: usize, comptime alignment: usize) type {
             self.typeInfo = typeInfo;
             if (!self.inPlace()) {
                 const valuePtr: *[*]u8 = @ptrCast(&self.value);
-                valuePtr.* = try alloc.rawAlloc(
+                valuePtr.* = alloc.rawAlloc(
                     typeInfo.size, 
                     std.mem.Alignment.fromByteUnits(typeInfo.alignment), 
                     @returnAddress()
-                );
+                ).?;
             }
         }
 

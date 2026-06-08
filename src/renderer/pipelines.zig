@@ -68,12 +68,14 @@ pub fn getPipeline(self: *Self, info: *const PipelineInfo) !RcPipeline {
 }
 
 pub fn loadPipeline(self: *Self, info: *const PipelineInfo) !Pipeline {
-    return switch (info.data) {
+    var pipeline = switch (info.data) {
         .graphics => |*state| 
-            self.loadGraphicsPipeline(info.name, state),
+            try self.loadGraphicsPipeline(info.name, state),
         .compute => 
-            self.loadComputePipeline(info.name),
+            try self.loadComputePipeline(info.name),
     };
+    @import("uniforms.zig").annotatePipelineTypeInfo(&pipeline);
+    return pipeline;
 }
 
 fn loadShader(self: *Self, path: []const u8, suffix: []const u8, reflection: *types.TypeRegistry) !vk.Shader {
