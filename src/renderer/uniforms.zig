@@ -27,28 +27,43 @@ pub const UpdatedUniform = struct {
 
 pub const UniformUpdates = []const UpdatedUniform;
 
-pub fn annotatePipelineTypeInfo(pipeline: *Pipelines.Pipeline) void {
-    annotateType(@constCast(pipeline.pushType), &pipeline.reflection) catch unreachable;
+pub fn annotatePipelineTypeInfo(pipeline: *Pipelines.Pipeline) !void {
+    annotateType(@constCast(pipeline.pushType), 0, &pipeline.reflection, null) catch unreachable;
 }
 
-fn annotateType(typeInfo: *types.TypeInfo, registry: *types.TypeRegistry) !void {
+fn annotateType(typeInfo: *types.TypeInfo, offset: u32, registry: *types.TypeRegistry, updates: ?*std.ArrayListUnmanaged(UpdatedUniform)) !void {
+    std.debug.assert(!(updates == null and offset != 0));
+    var localUpdates: std.ArrayListUnmanaged(UpdatedUniform) = .empty;
+    defer localUpdates.deinit(registry.alloc);
+    const effectiveUpdates = updates orelse &localUpdates;
+
     switch (typeInfo.info) {
         .Pointer => |ptr| {
-            try annotateType(@constCast(ptr.pointedType), registry);
+            try annotateType(@constCast(ptr.pointedType), 0, registry, null);
         },
         .Array => |arr| {
-            try annotateType(@constCast(arr.elementType), registry);
+            for (0..arr.length) |i| {
+                try annotateType(@constCast(arr.elementType), @intCast(offset + i * arr.elementType.size), registry, effectiveUpdates);
+            }
         },
         .Struct => |str| {
             for (str.members) |*member| {
                 if (ResolveTable.get(member.name)) |func| {
-                    _ = try @constCast(member).metadata.addT(*const ResolveFunc, "uniformFn", &func, registry);
+                    try effectiveUpdates.append(registry.alloc, .{
+                        .typeInfo = member.typeInfo,
+                        .offset = @intCast(offset + member.offset),
+                        .updateFunc = func,
+                    });
                 } else {
-                    try annotateType(@constCast(member.typeInfo), registry);
+                    try annotateType(@constCast(member.typeInfo), @intCast(offset + member.offset), registry, effectiveUpdates);
                 }
             }
         },
         else => {},
+    }
+
+    if (effectiveUpdates == &localUpdates and localUpdates.items.len > 0) {
+        _ = try typeInfo.metadata.addT(UniformUpdates, "UniformUpdates", &try localUpdates.toOwnedSlice(registry.alloc), registry);
     }
 }
 

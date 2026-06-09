@@ -74,7 +74,7 @@ pub fn loadPipeline(self: *Self, info: *const PipelineInfo) !Pipeline {
         .compute => 
             try self.loadComputePipeline(info.name),
     };
-    @import("uniforms.zig").annotatePipelineTypeInfo(&pipeline);
+    try @import("uniforms.zig").annotatePipelineTypeInfo(&pipeline);
     return pipeline;
 }
 
