@@ -4,6 +4,7 @@ const rc = @import("../rc_ptr.zig");
 const r = @import("renderer.zig");
 const Scene = @import("scene.zig");
 const types = @import("../types.zig");
+const uni = @import("uniforms.zig");
 
 const Material = @import("material.zig");
 const Mesh = @import("mesh.zig");
@@ -38,21 +39,14 @@ pub fn render(self: *Self, scene: *Scene, submit: *r.SubmitInfo) !void {
     const staging = try submit.staging.alloc(bufferType.size, Material.PropertiesAlignment);
     const data = types.AnyPtr.init(bufferType, staging.slice().ptr);
 
-    @memcpy(data.getMember("world").?.slice(), std.mem.asBytes(&self.transform));
-    @memcpy(data.getMember("view").?.slice(), std.mem.asBytes(&try scene.camera.getViewMatrix()));
-    @memcpy(data.getMember("proj").?.slice(), std.mem.asBytes(&scene.camera.getProjectionMatrix()));
+    const resolveData = uni.ResolveData{
+        .object = self,
+        .scene = scene,
+    };
+    uni.updateUniforms(data, &resolveData);
 
     const mesh = self.mesh.data().?;
     const numTriangles = mesh.numIndices / 3;
-    @memcpy(data.getMember("positions").?.slice(), &std.mem.toBytes(mesh.buffer.deviceAddress + mesh.getVerticesOffset()));
-    @memcpy(data.getMember("triangles").?.slice(), &std.mem.toBytes(mesh.buffer.deviceAddress + mesh.getIndicesOffset()));
-    data.getMember("numTriangles").?.getT(u32).?.* = numTriangles;
-
-    data.getMember("cameraPos").?.getT([3]f32).?.* = Vec4f.toDim(3, scene.camera.getPos(), 0);
-
-    @memcpy(data.getMember("material").?.slice(), material.propertiesBuffer);
-    @memcpy(data.getMember("light").?.slice(), std.mem.asBytes(&scene.light.properties));
-    data.getMember("environmentColor").?.getT([3]f32).?.* = scene.environmentColor;
 
     submit.cmds.pushData(&staging.deviceAddress());
 

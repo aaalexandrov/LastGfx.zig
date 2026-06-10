@@ -23,9 +23,24 @@ pub const UpdatedUniform = struct {
     typeInfo: *const types.TypeInfo,
     offset: u32,
     updateFunc: *const ResolveFunc,
+
+    pub fn ptr(self: *const @This(), basePtr: [*]u8) types.AnyPtr {
+        return .{
+            .typeInfo = self.typeInfo,
+            .ptr = basePtr + self.offset,
+        };
+    }
 };
 
 pub const UniformUpdates = []const UpdatedUniform;
+
+pub fn updateUniforms(data: types.AnyPtr, resolve: *const ResolveData) void {
+        const uniformUpdates = data.typeInfo.metadata.get("UniformUpdates").?.getT(UniformUpdates).?.*;
+    for (uniformUpdates) |update| {
+        const dstPtr = update.ptr(data.ptr);
+        update.updateFunc(dstPtr, resolve);
+    }
+}
 
 fn deinitUniformUpdates(uniformUpdates: *UniformUpdates, alloc: std.mem.Allocator) void {
     alloc.free(uniformUpdates.*);
