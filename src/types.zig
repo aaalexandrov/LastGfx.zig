@@ -21,14 +21,37 @@ pub const NamedMetadata = struct {
         if (result.found_existing)
             return error.AlreadyExists;
         result.key_ptr.* = try registry.alloc.dupe(u8, name);
-        try result.value_ptr.*.init(typeInfo, registry.alloc);
-        if (value) |val|
-            @memcpy(result.value_ptr.*.value[0..typeInfo.size], val);
+        try result.value_ptr.*.init(typeInfo, registry.alloc, value);
         return result.value_ptr;
     }
 
     pub fn addT(self: *Self, comptime T: type, name: []const u8, value: ?*const T, registry: *TypeRegistry) !*MetadataValue {
         return try self.add(name, try registry.get(T), @ptrCast(value orelse null), registry);
+    }
+
+    pub fn addDeinitMethod(self: *Self, fnDeinit: anytype, registry: *TypeRegistry) !void {
+        const deinitParams = @typeInfo(@TypeOf(fnDeinit)).@"fn".params;
+        //const T: type = @typeInfo(deinitParams[0].type.?).pointer.child;
+
+        const deiniterT = struct {
+            fn deinitSelf(ptr: [*]u8, _: *TypeRegistry) void {
+                return fnDeinit(@alignCast(@ptrCast(ptr)));
+            }
+            fn deinitSelfAlloc(ptr: [*]u8, registry_: *TypeRegistry) void {
+                return fnDeinit(@alignCast(@ptrCast(ptr)), registry_.alloc);
+            }
+        };
+
+        const deinitMethod: TypeInfo.DeinitFn = if (comptime deinitParams.len == 1)
+                deiniterT.deinitSelf
+            else if (comptime deinitParams.len == 2)
+                deiniterT.deinitSelfAlloc;
+        _ = try self.addT(TypeInfo.DeinitFn, TypeInfo.DeinitFnName, &deinitMethod, registry);
+    }
+
+    pub fn addDeinitForType(self: *Self, comptime T: type, registry: *TypeRegistry) !void {
+        const fnDeinit = @field(T, "deinit");
+        return try addDeinitMethod(self, fnDeinit, registry);
     }
 
     pub fn contains(self: *const Self, name: []const u8) bool {
@@ -94,6 +117,9 @@ pub const TypeInfo = struct {
             self.metadata.deinit(registry);
         }
     };
+
+    pub const DeinitFn = *const fn (value: [*]u8, registry: *TypeRegistry) void;
+    pub const DeinitFnName: []const u8 = "#deinit";
 
     pub const Self = @This();
 
@@ -300,6 +326,13 @@ pub const AnyPtr = struct {
         return null;
     }
 
+    pub fn deinitValue(self: *const Self, registry: *TypeRegistry) bool {
+        const deinitPtr = self.typeInfo.metadata.get(TypeInfo.DeinitFnName) orelse return false;
+        const deinitFn = (deinitPtr.getT(TypeInfo.DeinitFn) orelse return false).*;
+        deinitFn(self.ptr, registry);
+        return true;
+    }
+
     pub fn getMember(self: *const Self, name: []const u8) ?Self {
         if (self.typeInfo.getMember(name)) |member| {
             return Self{
@@ -347,23 +380,30 @@ pub fn AnyValue(comptime size: usize, comptime alignment: usize) type {
         pub const Alignment = alignment;
         pub const Self = @This();
 
-        pub fn init(self: *Self, typeInfo: *const TypeInfo, alloc: std.mem.Allocator) !void {
+        pub fn init(self: *Self, typeInfo: *const TypeInfo, alloc: std.mem.Allocator, value: ?[*] const u8) !void {
             self.typeInfo = typeInfo;
-            if (!self.inPlace()) {
-                const valuePtr: *[*]u8 = @ptrCast(&self.value);
+            const val: [*]u8 = if (self.inPlace())
+                @ptrCast(&self.value)
+            else blk: {
+                const valuePtr: *[*]u8 align(alignment) = @ptrCast(&self.value);
                 valuePtr.* = alloc.rawAlloc(
                     typeInfo.size, 
                     std.mem.Alignment.fromByteUnits(typeInfo.alignment), 
                     @returnAddress()
                 ).?;
-            }
+                break :blk valuePtr.*;
+            };
+            if (value) |v|
+                @memcpy(val[0..typeInfo.size], v);
         }
 
-        pub fn initT(self: *Self, T: type, registry: *TypeRegistry) !void {
-            try self.init(try registry.get(T), registry.alloc);
+        pub fn initT(self: *Self, T: type, registry: *TypeRegistry, value: ?*const T) !void {
+            try self.init(try registry.get(T), registry.alloc, @ptrCast(value));
         }
 
         pub fn deinit(self: *Self, registry: *TypeRegistry) void {
+            const anyPtr = self.ptr();
+            _ = anyPtr.deinitValue(registry);
             if (!self.inPlace()) {
                 const valuePtr: *[*]u8 = @ptrCast(&self.value);
                 registry.alloc.rawFree(
@@ -378,9 +418,9 @@ pub fn AnyValue(comptime size: usize, comptime alignment: usize) type {
             return AnyPtr.init(
                 self.typeInfo,
                 if (self.inPlace()) 
-                        &self.value
+                        @constCast(@ptrCast(&self.value))
                     else 
-                        @as(*[*]u8, @ptrCast(&self.value)).*
+                        @as(*[*]u8, @constCast(@ptrCast(&self.value))).*
             );
         }
 

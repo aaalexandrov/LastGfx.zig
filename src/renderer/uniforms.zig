@@ -27,7 +27,15 @@ pub const UpdatedUniform = struct {
 
 pub const UniformUpdates = []const UpdatedUniform;
 
+fn deinitUniformUpdates(uniformUpdates: *UniformUpdates, alloc: std.mem.Allocator) void {
+    alloc.free(uniformUpdates.*);
+}
+
 pub fn annotatePipelineTypeInfo(pipeline: *Pipelines.Pipeline) !void {
+    var updatesTypeInfo: *types.TypeInfo = @constCast(try pipeline.reflection.get(UniformUpdates));
+    if (updatesTypeInfo.metadata.get(types.TypeInfo.DeinitFnName) == null)
+        try updatesTypeInfo.metadata.addDeinitMethod(deinitUniformUpdates, &pipeline.reflection);
+
     annotateType(@constCast(pipeline.pushType), 0, &pipeline.reflection, null) catch unreachable;
 }
 
