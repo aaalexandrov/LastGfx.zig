@@ -14,17 +14,22 @@ void main()
     DirectionalLight light = pushData.inputData.light;
     vec3 environmentColor = pushData.inputData.environmentColor;
 
-    float nd = dot(normal, light.direction);
+    float NL = clamp(dot(normal, light.direction), 0, 1);
 
     vec4 albedo = texture(sampler2D(heapTexture2D[material.albedo.index], heapSampler[material.textureSampler.index]), uv); 
 
-    /*
-    vec3 cameraPos = pushData.inputData.data.cameraPos;
+    vec3 cameraPos = pushData.inputData.cameraPos;
     vec3 V = normalize(cameraPos - worldPosition);
-    vec3 H = normalize(V + light.direction);
-    float nh = dot(normal, H);
-    */
+    vec3 R = reflect(-light.direction, normal);
+    float RV = clamp(dot(R, V), 0, 1);
 
-    color.rgb = (light.color * float(nd >= 0) * (nd /*+ pow(max(0, nh), 180)*/) + environmentColor) * material.color * albedo.rgb;
+    vec3 diffuseColor = material.color * albedo.rgb;
+    vec3 specularColor = mix(vec3(0.04), diffuseColor, material.metallic);
+
+    vec3 ambient = environmentColor * diffuseColor;
+    vec3 diffuse = light.color * diffuseColor * NL;
+    vec3 specular = light.color * specularColor * pow(RV, 180);
+
+    color.rgb = ambient + diffuse + specular;
     color.a = albedo.a;
 }

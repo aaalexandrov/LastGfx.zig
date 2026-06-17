@@ -7,6 +7,7 @@ const spv = @import("../spirv_reflect.zig");
 
 pub const Pipeline = struct {
     pipeline: vk.Pipeline,
+    workgroupSize: [3]u32,
     pushType: *const types.TypeInfo,
     reflection: types.TypeRegistry,
 
@@ -78,7 +79,7 @@ pub fn loadPipeline(self: *Self, info: *const PipelineInfo) !Pipeline {
     return pipeline;
 }
 
-fn loadShader(self: *Self, path: []const u8, suffix: []const u8, reflection: *types.TypeRegistry) !vk.Shader {
+fn loadShader(self: *Self, path: []const u8, suffix: []const u8, reflection: *types.TypeRegistry) !struct{ shader: vk.Shader, workgroupSize: [3]u32 } {
     var pathBuf: [std.fs.max_path_bytes]u8 = undefined;
 
     const loadPath = try std.fmt.bufPrint(&pathBuf, "{s}{s}", .{path, suffix});
@@ -89,9 +90,13 @@ fn loadShader(self: *Self, path: []const u8, suffix: []const u8, reflection: *ty
 
     const shader = try vk.Shader.initCode(self.gfx, spvCode, loadPath);
 
-    _ = try spv.reflect(spvCode, reflection);
 
-    return shader;
+    const workgroupSize = try spv.reflect(spvCode, reflection);
+
+    return .{
+        .shader = shader,
+        .workgroupSize = workgroupSize
+    };
 }
 
 pub fn loadGraphicsPipeline(self: *Self, path: []const u8, state: *const vk.Pipeline.GraphicsState) !Pipeline {
@@ -100,13 +105,14 @@ pub fn loadGraphicsPipeline(self: *Self, path: []const u8, state: *const vk.Pipe
     errdefer pipeline.reflection.deinit();
 
     var shaderMesh = try loadShader(self, path, ".mesh.spv", &pipeline.reflection);
-    defer shaderMesh.deinit(self.gfx);
+    defer shaderMesh.shader.deinit(self.gfx);
 
     var shaderFrag = try loadShader(self, path, ".frag.spv", &pipeline.reflection);
-    defer shaderFrag.deinit(self.gfx);
+    defer shaderFrag.shader.deinit(self.gfx);
 
-    pipeline.pipeline = try vk.Pipeline.initGraphics(self.gfx, &shaderMesh, &shaderFrag, state, path);
+    pipeline.pipeline = try vk.Pipeline.initGraphics(self.gfx, &shaderMesh.shader, &shaderFrag.shader, state, path);
     pipeline.pushType = pipeline.reflection.find("constants").?;
+    pipeline.workgroupSize = shaderMesh.workgroupSize;
     return pipeline;
 }
 
@@ -116,8 +122,9 @@ pub fn loadComputePipeline(self: *Self, path: []const u8) !Pipeline {
     errdefer pipeline.reflection.deinit();
 
     var shaderCompute = try loadShader(self, path, ".comp.spv", &pipeline.reflection);
-    defer shaderCompute.deinit(self.gfx);
+    defer shaderCompute.shader.deinit(self.gfx);
 
-    pipeline.pipeline = try vk.Pipeline.initCompute(self.gfx, &shaderCompute, path);
+    pipeline.pipeline = try vk.Pipeline.initCompute(self.gfx, &shaderCompute.shader, path);
+    pipeline.workgroupSize = shaderCompute.workgroupSize;
     return pipeline;
 }

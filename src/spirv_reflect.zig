@@ -5,7 +5,7 @@ const types = @import("types.zig");
 const TypeInfo = types.TypeInfo;
 const TypeRegistry = types.TypeRegistry;
 
-pub fn reflect(spvCode: []const u32, registry: *TypeRegistry) !void {
+pub fn reflect(spvCode: []const u32, registry: *TypeRegistry) ![3]u32 {
     var spvModule: c.SpvReflectShaderModule = undefined;
     const result = c.spvReflectCreateShaderModule(spvCode.len * @sizeOf(u32), spvCode.ptr, &spvModule);
     if (result != c.SPV_REFLECT_RESULT_SUCCESS)
@@ -16,7 +16,11 @@ pub fn reflect(spvCode: []const u32, registry: *TypeRegistry) !void {
         _ = try parseVarType(varBlock, registry);
     }
 
+    const size = spvModule.entry_points[0].local_size;
+
     c.spvReflectDestroyShaderModule(&spvModule);
+
+    return .{size.x, size.y, size.z};
 }
 
 fn parseVarType(reflVar: *c.SpvReflectBlockVariable, registry: *TypeRegistry) !*TypeInfo {
