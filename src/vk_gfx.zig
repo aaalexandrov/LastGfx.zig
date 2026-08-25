@@ -722,6 +722,9 @@ pub const Swapchain = struct {
         if (!self.capabilitiesHasValidExtent)
             _ = c.SDL_GetWindowSize(self.window, @ptrCast(&surfaceCaps.currentExtent.width), @ptrCast(&surfaceCaps.currentExtent.height));
 
+        if (surfaceCaps.maxImageCount == 0)
+            surfaceCaps.maxImageCount = @max(8, surfaceCaps.minImageCount);
+
         self.numImages = @intCast(@min(@max(surfaceCaps.minImageCount, self.numImages), surfaceCaps.maxImageCount));
         self.maxNumImages = @intCast(surfaceCaps.maxImageCount);
 
