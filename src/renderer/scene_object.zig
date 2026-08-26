@@ -52,5 +52,5 @@ pub fn render(self: *Self, scene: *Scene, submit: *r.SubmitInfo) !void {
 
     const pipeline = material.pipeline.data().?;
     submit.cmds.bindRenderPipeline(&pipeline.pipeline);
-    submit.cmds.drawMeshTasks(@max((numTriangles + pipeline.workgroupSize[0] - 1) / pipeline.workgroupSize[0], 1), 1, 1);
+    submit.cmds.drawMeshTasks((numTriangles + pipeline.workgroupSize[0] - 1) / pipeline.workgroupSize[0], 1, 1);
 }
