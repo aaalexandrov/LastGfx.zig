@@ -14,14 +14,15 @@ layout(triangles, max_vertices = WORKGROUP_SIZE*3, max_primitives = WORKGROUP_SI
 
 void main()
 {
-    uint triIndex = gl_GlobalInvocationID.x;
     uint numTriangles = pushData.inputData.numTriangles;
-    if (triIndex >= numTriangles)
-        return;
     
     uint baseTri = gl_WorkGroupID.x * WORKGROUP_SIZE;
     uint workgroupTris = min(WORKGROUP_SIZE, numTriangles - baseTri);
     SetMeshOutputsEXT(3 * workgroupTris, workgroupTris);
+
+    uint triIndex = gl_GlobalInvocationID.x;
+    if (triIndex >= numTriangles)
+        return;
 
     PositionData meshPositions = pushData.inputData.positions;
     IndexData meshTriangles = pushData.inputData.triangles; 

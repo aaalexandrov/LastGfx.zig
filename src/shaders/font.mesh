@@ -5,29 +5,31 @@
 
 layout (location = 0) out vec3 uvlayer[];
 
-layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
-layout(triangles, max_vertices = 128, max_primitives = 64) out;
+#define WORKGROUP_SIZE 32
+
+layout(local_size_x = WORKGROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
+layout(triangles, max_vertices = WORKGROUP_SIZE * 4, max_primitives = WORKGROUP_SIZE * 2) out;
 
 void main()
 {
-    uint charIndex = gl_GlobalInvocationID.x;
     uint numCharacters = pushData.inputData.numCharacters;
 
+    uint baseChar = gl_WorkGroupID.x * WORKGROUP_SIZE;
+    uint workgroupChars = min(WORKGROUP_SIZE, numCharacters - baseChar);
+    uint vertexCount = 4 * workgroupChars;
+    uint triangleCount = 2 * workgroupChars;
+    SetMeshOutputsEXT(vertexCount, triangleCount);  
+
+    uint charIndex = gl_GlobalInvocationID.x;
     if (charIndex >= numCharacters)
         return;
-
-    if (gl_LocalInvocationID.x == 0) {
-        uint vertexCount = 4 * numCharacters;
-        uint triangleCount = 2 * numCharacters;
-        SetMeshOutputsEXT(vertexCount, triangleCount);  
-    }
 
     vec2 quadSize = pushData.inputData.quadSize;
 
     CharData ch = pushData.inputData.characters[charIndex];
 
-    uint baseChar = charIndex % gl_WorkGroupSize.x;
-    uint baseVertex = 4 * baseChar;
+    uint threadChar = charIndex - baseChar;
+    uint baseVertex = 4 * threadChar;
 
     for (uint i = 0; i < 4; ++i) {
         vec2 uv = vec2(i % 2, i / 2);
@@ -35,7 +37,7 @@ void main()
         uvlayer[i + baseVertex] = vec3(uv, ch.layer);
     }
 
-    uint basePrim = 2 * baseChar;
+    uint basePrim = 2 * threadChar;
     gl_PrimitiveTriangleIndicesEXT[0 + basePrim] =  uvec3(baseVertex + 0, baseVertex + 1, baseVertex + 2);
     gl_PrimitiveTriangleIndicesEXT[1 + basePrim] =  uvec3(baseVertex + 2, baseVertex + 1, baseVertex + 3);
 }
