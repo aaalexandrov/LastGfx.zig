@@ -87,7 +87,7 @@ pub fn Vec(comptime N: u32, comptime T: type) type {
             comptime var mask: [N]i32 = undefined;
             inline for (0..N) |i|
                 mask[i] = if (i < D) @mod(@as(i32, @intCast(i)) + n, D) else -1;
-            return @shuffle(f32, v, @Vector(1, T){0}, mask);
+            return @shuffle(T, v, @Vector(1, T){0}, mask);
         }
 
         pub fn length2(v: Simd) T {
@@ -140,6 +140,147 @@ test "Vec" {
     try std.testing.expectEqual(cross3, cross3_s);
 }
 
+pub fn Quat(comptime T: type) type {
+    return struct {
+        pub const Simd = @Vector(4, T);
+        pub const Arr = [4]T;
+        pub const Dim = 4;
+        pub const Elem = T;
+        pub const Eps = std.math.floatEps(T);
+        pub const Vec3 = Vec(3, T);
+        pub const Vec4 = Vec(4, T);
+
+        pub fn load(a: Arr) Simd {
+            return a;
+        }
+
+        pub fn store(v: Simd) Arr {
+            return v;
+        }
+
+        pub fn init(x: T, y: T, z: T, w: T) Simd {
+            return Simd{ x, y, z, w };
+        }
+
+        pub fn initVec3(v: Vec3.Simd, w: T) Simd {
+            return Simd{ v[0], v[1], v[2], w };
+        }
+
+        pub fn splat(e: T) Simd {
+            return @as(Simd, @splat(e));
+        }
+
+        pub fn identity() Simd {
+            return Simd{ 0, 0, 0, 1 };
+        }
+
+        pub fn toDim(comptime D: u32, v: Simd, pad: T) @Vector(D, T) {
+            return Vec4.toDim(D, v, pad);
+        }
+
+        pub fn axisAngle(axis_: Vec3.Simd, angle_: T) Simd {
+            const s = @as(Vec3.Simd, @splat(@sin(angle_ * 0.5)));
+            return initVec3(s * axis_, @cos(angle_ * 0.5));
+        }
+
+        pub fn axis(v: Simd) Vec3.Simd {
+            const t1: T = 1 - v[3] * v[3];
+            if (t1 <= 0)
+                return Vec3.Simd{ 0, 0, 1 };
+            const t2: T = 1 / @sqrt(t1);
+            return toDim(3, v, undefined) * @as(Vec3.Simd, @splat(t2));
+        }
+
+        pub fn angle(v: Simd) T {
+            const cosHalf: T = comptime @cos(0.5);
+            if (@abs(v[3]) > cosHalf) {
+                const a: T = std.math.asin(Vec3.length(toDim(3, v, undefined))) * 2;
+                return if (v[3] < 0)
+                    std.math.pi * 2 - a
+                else
+                    a;
+            }
+            return std.math.acos(v[3]) * 2;
+        }
+
+        pub fn get(v: Simd, i: usize) T {
+            return @as(Arr, v)[i];
+        }
+
+        pub fn set(v: Simd, i: usize, e: T) Simd {
+            var va: Arr = v;
+            va[i] = e;
+            return va;
+        }
+
+        pub fn dot(a: Simd, b: Simd) T {
+            return @reduce(.Add, a * b);
+        }
+
+        pub fn length2(v: Simd) T {
+            return dot(v, v);
+        }
+
+        pub fn length(v: Simd) T {
+            return @sqrt(length2(v));
+        }
+
+        pub fn normalize(v: Simd) Simd {
+            const len = length(v);
+            if (std.math.approxEqAbs(T, len, 0, Eps))
+                return v;
+            return v * @as(Simd, @splat(1 / len));
+        }
+
+        pub fn conjugate(v: Simd) Simd {
+            return v * Simd{ -1, -1, -1, 1 };
+        }
+
+        pub fn inverse(v: Simd) Simd {
+            const len2 = length2(v);
+            return conjugate(v) * @as(Simd, @splat(1 / len2));
+        }
+
+        pub fn mul(a: Simd, b: Simd) Simd {
+            var res: Simd = @as(Simd, @splat(a[3])) * b;
+            res += @as(Simd, @splat(a[0])) * @shuffle(T, b, undefined, [4]i32{ 3, 2, 1, 0 }) * Simd{ 1, -1, 1, -1 };
+            res += @as(Simd, @splat(a[1])) * @shuffle(T, b, undefined, [4]i32{ 2, 3, 0, 1 }) * Simd{ 1, 1, -1, -1 };
+            res += @as(Simd, @splat(a[2])) * @shuffle(T, b, undefined, [4]i32{ 1, 0, 3, 2 }) * Simd{ -1, 1, 1, -1 };
+            return res;
+        }
+
+        pub fn rotateVec(q: Simd, v: Vec3.Simd) Vec3.Simd {
+            const u = toDim(3, q, undefined);
+            const uv = Vec3.cross(u, v);
+            const uuv = Vec3.cross(u, uv);
+            const w = Vec3.splat(q[3]);
+            return v + (uv * w + uuv) * Vec3.splat(2.0);
+        }
+    };
+}
+
+test "Quat" {
+    const qf = Quat(f32);
+    const v3f = qf.Vec3;
+    try std.testing.expectEqual(4, qf.Dim);
+    try std.testing.expectEqual(qf.load([4]f32{ 0, 0, 0, 1 }), qf.identity());
+    try std.testing.expectEqual(-1, qf.conjugate(qf.Simd{ 1, 1, 1, 1 })[2]);
+    try std.testing.expectEqual(qf.identity(), qf.mul(qf.identity(), qf.identity()));
+    const q = qf.Simd{ 1, 2, 3, 4 };
+    try std.testing.expectEqual(qf.identity(), qf.mul(q, qf.inverse(q)));
+    const axis = v3f.normalize(v3f.Simd{ 1, 2, 3 });
+    const angle: f32 = std.math.pi / 3.0;
+    const qa = qf.axisAngle(axis, angle);
+    try std.testing.expectEqual(axis, qf.axis(qa));
+    try std.testing.expectEqual(angle, qf.angle(qa));
+    const m3f = Mat(3, 3, f32);
+    const ma = m3f.rotate3D(3, angle, axis);
+    const v = v3f.Simd{ 1, 0, 0 };
+    const qt = qf.rotateVec(qa, v);
+    const mt = m3f.mulMatVec(ma, v);
+    try std.testing.expect(v3f.length(mt - qt) < 1e-6);
+}
+
 pub fn Mat(comptime R: u32, comptime C: u32, comptime T: type) type {
     return struct {
         pub const Col = Vec(R, T);
@@ -154,7 +295,7 @@ pub fn Mat(comptime R: u32, comptime C: u32, comptime T: type) type {
         pub fn diag(d: T) Simd {
             var m: Simd = undefined;
             inline for (0..C) |c|
-                m[c] = Col.cardinal(c, d); 
+                m[c] = Col.cardinal(c, d);
             return m;
         }
 
@@ -163,9 +304,9 @@ pub fn Mat(comptime R: u32, comptime C: u32, comptime T: type) type {
             var res: Mat1.Simd = undefined;
             inline for (0..C1) |c1| {
                 res[c1] = if (c1 < C)
-                        Col.toDim(R1, m[c1], 0)
-                    else
-                        Mat1.Col.cardinal(c1, diagPad);
+                    Col.toDim(R1, m[c1], 0)
+                else
+                    Mat1.Col.cardinal(c1, diagPad);
             }
             return res;
         }
@@ -173,7 +314,7 @@ pub fn Mat(comptime R: u32, comptime C: u32, comptime T: type) type {
         pub fn row(m: Simd, r: u32) Row.Simd {
             var res: Row.Arr = undefined;
             for (0..C) |c|
-                res[c] = Col.get(m[c] ,r);
+                res[c] = Col.get(m[c], r);
             return res;
         }
 
@@ -206,7 +347,7 @@ pub fn Mat(comptime R: u32, comptime C: u32, comptime T: type) type {
             return res;
         }
 
-        pub fn boolOp(comptime op: BoolOp, a: Simd, b:Simd) RowBool.Simd {
+        pub fn boolOp(comptime op: BoolOp, a: Simd, b: Simd) RowBool.Simd {
             var res: RowBool.Simd = undefined;
             inline for (0..C) |c| {
                 const rowRes: RowBool.Simd = switch (op) {
@@ -266,7 +407,7 @@ pub fn Mat(comptime R: u32, comptime C: u32, comptime T: type) type {
             var det: T = 1;
             for (0..C) |c| {
                 var maxInd = c;
-                for (c+1..C) |cm| {
+                for (c + 1..C) |cm| {
                     if (@abs(Col.get(m[cm], c)) > @abs(Col.get(m[maxInd], c)))
                         maxInd = cm;
                 }
@@ -278,7 +419,7 @@ pub fn Mat(comptime R: u32, comptime C: u32, comptime T: type) type {
                 if (std.math.approxEqAbs(T, pivot, 0, Eps))
                     return 0;
                 det *= pivot;
-                for (c+1..C) |cn| {
+                for (c + 1..C) |cn| {
                     const elem = Col.get(m[cn], c);
                     if (std.math.approxEqAbs(T, elem, 0, Eps))
                         continue;
@@ -292,14 +433,14 @@ pub fn Mat(comptime R: u32, comptime C: u32, comptime T: type) type {
         }
 
         pub fn inverse(m_: Simd) !Simd {
-             comptime if (R != C) unreachable;
+            comptime if (R != C) unreachable;
             // TODO: specialize for small sizes
             var m = m_;
             var res = diag(1);
             for (0..C) |c| {
                 var maxInd = c;
-                for (c+1..C) |cm| {
-                    if (@abs(Col.get(m[cm], c)) > @abs(Col.get(m[maxInd],c)))
+                for (c + 1..C) |cm| {
+                    if (@abs(Col.get(m[cm], c)) > @abs(Col.get(m[maxInd], c)))
                         maxInd = cm;
                 }
                 if (maxInd != c) {
@@ -333,10 +474,10 @@ pub fn Mat(comptime R: u32, comptime C: u32, comptime T: type) type {
                 res[c] = Col.cardinal(c, 1);
             }
             inline for (0..R) |r| {
-                res[C-1][r] = if (r < @min(R, PosVec.Dim))
-                        PosVec.get(pos, r)
-                    else
-                        @intFromBool(r == R-1);
+                res[C - 1][r] = if (r < @min(R, PosVec.Dim))
+                    PosVec.get(pos, r)
+                else
+                    @intFromBool(r == R - 1);
             }
             return res;
         }
@@ -370,20 +511,20 @@ pub fn Mat(comptime R: u32, comptime C: u32, comptime T: type) type {
             comptime if (C != 4 or R != 4) unreachable;
             const tanFov2 = @tan(fovY / 2);
             return Simd{
-                .{1/(aspect*tanFov2), 0, 0, 0},
-                .{0, 1/tanFov2, 0, 0},
-                .{0, 0, -(far+near)/(far-near), -1},
-                .{0, 0, -2*far*near/(far-near), 0},
+                .{ 1 / (aspect * tanFov2), 0, 0, 0 },
+                .{ 0, 1 / tanFov2, 0, 0 },
+                .{ 0, 0, -(far + near) / (far - near), -1 },
+                .{ 0, 0, -2 * far * near / (far - near), 0 },
             };
         }
 
         pub fn orthographic(left: T, right: T, bottom: T, top: T, near: T, far: T) Simd {
             comptime if (C != 4 or R != 4) unreachable;
             return Simd{
-                .{2/(right-left), 0, 0, 0},
-                .{0, 2/(top-bottom), 0, 0},
-                .{0, 0, -2/(far-near), 0},
-                .{-(right+left)/(right-left), -(top+bottom)/(top-bottom), -(far+near)/(far-near), 1},
+                .{ 2 / (right - left), 0, 0, 0 },
+                .{ 0, 2 / (top - bottom), 0, 0 },
+                .{ 0, 0, -2 / (far - near), 0 },
+                .{ -(right + left) / (right - left), -(top + bottom) / (top - bottom), -(far + near) / (far - near), 1 },
             };
         }
     };
@@ -416,16 +557,16 @@ test "Mat" {
 
     const mat43f = Mat(4, 3, f32);
     const m: mat43f.Simd = .{
-        .{2, 0, 0, 1},
-        .{0, 2, 0, 1},
-        .{0, 0, 2, 1},
+        .{ 2, 0, 0, 1 },
+        .{ 0, 2, 0, 1 },
+        .{ 0, 0, 2, 1 },
     };
-    const v4: mat43f.Col.Simd = .{1, 2, 3, 1};
-    const v3: mat43f.Row.Simd = .{1, 2, 3};
+    const v4: mat43f.Col.Simd = .{ 1, 2, 3, 1 };
+    const v3: mat43f.Row.Simd = .{ 1, 2, 3 };
 
     const vm = mat43f.mulVecMat(v4, m);
-    try std.testing.expectEqual(mat43f.Row.Simd{3, 5, 7}, vm);
+    try std.testing.expectEqual(mat43f.Row.Simd{ 3, 5, 7 }, vm);
 
     const mv = mat43f.mulMatVec(m, v3);
-    try std.testing.expectEqual(mat43f.Col.Simd{2, 4, 6, 6}, mv);
+    try std.testing.expectEqual(mat43f.Col.Simd{ 2, 4, 6, 6 }, mv);
 }
