@@ -47,9 +47,13 @@ pub fn Rotation(comptime N: u32, comptime T: type) type {
                 };
                 return Mat2.mulMatVec(m, v);
             }
+
+            pub fn equal(self: Self, rhs: Self, eps: T) bool {
+                return std.math.approxEqAbs(T, self.angle, rhs.angle, eps);
+            }
         },
         3 => struct {
-            quat: Quat.Simd = .identity(),
+            quat: Quat.Simd = Quat.identity(),
 
             pub const Quat = vm.Quat(T);
             pub const Vec = vm.Vec(N, T);
@@ -70,6 +74,10 @@ pub fn Rotation(comptime N: u32, comptime T: type) type {
             pub fn rotateVec(self: Self, v: Vec.Simd) Vec.Simd {
                 return Quat.rotateVec(self.quat, v);
             }
+
+            pub fn equal(self: Self, rhs: Self, eps: T) bool {
+                return Quat.equal(self.quat, rhs.quat, eps);
+            }
         },
         else => unreachable
     };
@@ -89,7 +97,7 @@ pub fn Transform(comptime N: u32, comptime T: type) type {
             const invRot = self.rotation.inverse();
             const invScale = 1 / self.scale;
             return .{
-                .position = invRot.rotateVec(self.position) * Vec.splat(invScale),
+                .position = -invRot.rotateVec(self.position) * Vec.splat(invScale),
                 .scale = invScale,
                 .rotation = invRot,
             };
@@ -110,7 +118,37 @@ pub fn Transform(comptime N: u32, comptime T: type) type {
         pub fn transformVec(self: *const Self, v: Vec.Simd) Vec.Simd {
             return self.rotation.rotateVec(v) * Vec.splat(self.scale);
         }
+
+        pub fn equal(self: *const Self, rhs: *const Self, eps: T) bool {
+            return std.math.approxEqAbs(T, self.scale, rhs.scale, eps)
+                and Vec.equal(self.position, rhs.position, eps)
+                and self.rotation.equal(rhs.rotation, eps);
+        }
     };
+}
+
+pub fn TestTransform() !void {
+    const Transform3f = Transform(3, f32);
+    const Vec3f = vm.Vec(3, f32);
+    const Quatf = vm.Quat(f32);
+
+    const ident: Transform3f = .{};
+    const identInv = ident.inverse();
+    try std.testing.expectEqualDeep(ident, identInv);
+
+    const trans: Transform3f = .{
+        .rotation = .{.quat = Quatf.axisAngle(Vec3f.Simd{0, 0, 1}, std.math.pi * 0.5) },
+        .scale = 2,
+        .position = Vec3f.Simd{100, 0, 0},
+    };
+    const transInv = trans.inverse();
+    const transInvCompose = trans.compose(&transInv);
+    try std.testing.expect(ident.equal(&transInvCompose, 1e-4));
+    try std.testing.expect(ident.equal(&transInv.compose(&trans), 1e-4));
+}
+
+test "Transform" {
+    try TestTransform();
 }
 
 pub fn Sphere(comptime N: u32, comptime T: type) type {

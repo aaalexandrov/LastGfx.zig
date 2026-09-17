@@ -143,6 +143,10 @@ pub fn Vec(comptime N: u32, comptime T: type) type {
                 else => unreachable
             }
         }
+
+        pub fn equal(a: Simd, b: Simd, eps: T) bool {
+            return @reduce(.And, @abs(a - b) <= splat(eps));
+        }
     };
 }
 
@@ -286,6 +290,10 @@ pub fn Quat(comptime T: type) type {
             const uuv = Vec3.cross(u, uv);
             const w = Vec3.splat(q[3]);
             return v + (uv * w + uuv) * Vec3.splat(2.0);
+        }
+
+        pub fn equal(a: Simd, b: Simd, eps: T) bool {
+            return Vec4.equal(a, b, eps);
         }
     };
 }
