@@ -56,6 +56,24 @@ pub fn Vec(comptime N: u32, comptime T: type) type {
             return @reduce(.Or, v);
         }
 
+        pub fn minElemIndex(v: Simd) u32 {
+            var minInd: u32 = 0;
+            inline for (1..N) |i| {
+                if (v[i] < get(v, minInd))
+                    minInd = @intCast(i);
+            }
+            return minInd;
+        }
+
+        pub fn maxElemIndex(v: Simd) u32 {
+            var maxInd: u32 = 0;
+            inline for (1..N) |i| {
+                if (v[i] > v[maxInd])
+                    maxInd = @intCast(i);
+            }
+            return maxInd;
+        }
+
         pub fn toDim(comptime D: u32, v: Simd, pad: T) @Vector(D, T) {
             var res: [D]T = undefined;
             inline for (0..D) |i|
@@ -98,6 +116,10 @@ pub fn Vec(comptime N: u32, comptime T: type) type {
             return @sqrt(length2(v));
         }
 
+        pub fn distance(a: Simd, b: Simd) T {
+            return length(b - a);
+        }
+
         pub fn normalize(v: Simd) Simd {
             const len = length(v);
             if (std.math.approxEqAbs(T, len, 0, Eps))
@@ -109,10 +131,17 @@ pub fn Vec(comptime N: u32, comptime T: type) type {
             return @as(Arr, v)[i];
         }
 
-        pub fn set(v: Simd, i: usize, e: T) Simd {
+        pub fn setCopy(v: Simd, i: usize, e: T) Simd {
             var va: Arr = v;
             va[i] = e;
             return va;
+        }
+
+        pub fn set(v: *Simd, i: usize, e: T) void {
+            switch (i) {
+                inline 0...N-1 => |idx| v[idx] = e,
+                else => unreachable
+            }
         }
     };
 }
@@ -204,13 +233,15 @@ pub fn Quat(comptime T: type) type {
         }
 
         pub fn get(v: Simd, i: usize) T {
-            return @as(Arr, v)[i];
+            return Vec4.get(v, i);
         }
 
-        pub fn set(v: Simd, i: usize, e: T) Simd {
-            var va: Arr = v;
-            va[i] = e;
-            return va;
+        pub fn setCopy(v: Simd, i: usize, e: T) Simd {
+            return Vec4.setCopy(v, i, e);
+        }
+
+        pub fn set(v: *Simd, i: usize, e: T) void {
+            Vec4.set(v, i, e);
         }
 
         pub fn dot(a: Simd, b: Simd) T {
@@ -321,7 +352,7 @@ pub fn Mat(comptime R: u32, comptime C: u32, comptime T: type) type {
         pub fn setRow(m: Simd, r: u32, rowVec: Row.Simd) Simd {
             var res: Simd = undefined;
             for (0..C) |c|
-                res[c] = m[c].set(r, Row.get(rowVec, c));
+                res[c] = m[c].setCopy(r, Row.get(rowVec, c));
             return res;
         }
 
