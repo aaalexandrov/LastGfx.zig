@@ -39,17 +39,17 @@ pub fn SpatialTree(comptime N: u32, T: type, D: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            var itNodes = self.nodes.valueIterator();
-            while (itNodes.next()) |node| {
-                self.alloc.destroy(node.*);
-            }
+            self.clear();
+        }
+
+        pub fn clear(self: *Self) void {
             self.nodes.clearAndFree(self.alloc);
         }
 
         fn nodeIndex(self: *const Self, nodeBox: *const Box) u32 {
             std.debug.assert(!nodeBox.isEmpty());
             var curBox = self.box;
-            var index: u32 = 0;
+            var index: u32 = 1;
             var level: u32 = 0;
             lvl: while (level < self.nodeLevels) : (level += 1) {
                 std.debug.assert(curBox.contains(nodeBox));
@@ -65,9 +65,35 @@ pub fn SpatialTree(comptime N: u32, T: type, D: type) type {
                     } else
                         break :lvl;
                 }
-                index = index * NodesPerLevel + 1 + childIdx;
+                index = (index << N) | childIdx;
             }
             return index;
+        }
+
+        fn nodeBoxFromIndex(self: *const Self, nodeIdx: u32) Box {
+            if (nodeIdx == 0)
+                return .{};
+            var shift: u32 = 32 - @clz(nodeIdx) - 1;
+            std.debug.assert(shift % N == 0);
+            var box = self.box;
+            while (shift > 0) {
+                shift -= N;
+                const childIdx = nodeIdx >> shift;
+                box = getChildBox(&box, childIdx);
+            }
+            return box;
+        }
+
+        fn getChildBox(box: *const Box, childIdx: u32) Box {
+            var curBox = box.*;
+            const center = box.center();
+            inline for (0..N) |d| {
+                if ((childIdx & (1 << d)) == 0)
+                    curBox.max[d] = center[d]
+                else
+                    curBox.min[d] = center[d];
+            }
+            return curBox;
         }
 
         pub fn addData(self: *Self, dataBox: *const Box, data: Data) !void {
@@ -103,5 +129,70 @@ pub fn SpatialTree(comptime N: u32, T: type, D: type) type {
                 found.node.data.swapRemove(found.dataIdx);
             }
         }
+
+        pub fn iterator(self: *const Self) Iterator {
+            return .{
+                .spatial = self,
+                .box = self.box,
+                .nodeIdx = 1,
+                .itemIdx = null,
+                .childIdx = 0,
+            };
+        }
+
+        pub const Iterator = struct {
+            spatial: *const Self,
+            box: Box,
+            nodeIdx: u32,
+            itemIdx: ?u32,
+            childIdx: u32,
+
+            pub fn next(self: *const Iterator) ?struct { box: *const Box, data: ?Data } {
+                const node = self.spatial.nodes.getPtr(self.nodeIdx) orelse return null;
+                const curBox = self.box;
+                var data: ?*const Data = null;
+                if (self.itemIdx) |itemIndex| {
+                    const item = &node.data.items[itemIndex];
+                    curBox = item.dataBox;
+                    data = item.data;
+                }
+                self.advanceItem(node);
+                return .{.box = curBox, .data = data};
+            }
+
+            pub fn skipNodeAndChildren(self: *const Iterator) void {
+                const node = self.spatial.nodes.getPtr(self.nodeIdx).?;
+                self.childIdx = NodesPerLevel;
+                self.advanceNode(node);
+            }
+
+            fn advanceItem(self: *const Iterator, node: *const Node) void {
+                if (self.itemIdx == null)
+                    self.itemIdx = 0
+                else
+                    self.itemIdx += 1;
+                if (self.itemIdx >= node.data.items.len)
+                    advanceNode(self, node);
+            }
+
+            fn advanceNode(self: *const Iterator, node: *const Node) void {
+                self.itemIdx = null;
+                while (self.childIdx < NodesPerLevel) {
+                    if ((node.childMask & (1 << self.childIdx)) != 0) {
+                        // descend to a valid child
+                        self.nodeIdx = (self.nodeIdx << N) | self.childIdx;
+                        self.box = getChildBox(self.box, self.childIdx);
+                        self.childIdx = 0;
+                        return;
+                    }
+                    self.childIdx += 1;
+                }
+                // go up to the parent
+                // if we're already a the root (index 1), we'll go to index 0 which does not exist so nextBox() will return null on the next call
+                self.childIdx = self.nodeIdx & (NodesPerLevel - 1);
+                self.nodeIdx = self.nodeIdx >> N;
+                self.box = self.nodeBoxFromIndex(self.nodeIdx);
+            }
+        };
     };
 }
