@@ -91,6 +91,9 @@ pub fn Transform(comptime N: u32, comptime T: type) type {
 
         pub const Vec = vm.Vec(N, T);
         pub const Rot = Rotation(N, T);
+        pub const Sphere_ = Sphere(N, T);
+        pub const Box_ = Box(N, T);
+        pub const OBox = OrientedBox(N, T);
         pub const Self = @This();
 
         pub fn inverse(self: *const Self) Self {
@@ -119,7 +122,35 @@ pub fn Transform(comptime N: u32, comptime T: type) type {
             return self.rotation.rotateVec(v) * Vec.splat(self.scale);
         }
 
-        pub fn equal(self: *const Self, rhs: *const Self, eps: T) bool {
+        pub fn transformSphere(self: *const Self, sphere: *const Sphere_) Sphere_ {
+            return .{
+                .center = self.transformPoint(sphere.center),
+                .radius = self.scale * sphere.radius,
+            };
+        }
+
+        pub fn transformBoxAsOBox(self: *const Self, box: *const Box_) OBox {
+            const halfExtent = box.size() * 0.5;
+            return .{
+                .center = self.transformPoint(box.min + halfExtent),
+                .halfExtent = halfExtent * Vec.splat(self.scale),
+                .rotation = self.rotation,
+            };
+        }
+
+        pub fn transformBox(self: *const Self, box: *const Box_) Box_ {
+            return self.transformBoxAsOBox(box).getBox();
+        }
+
+        pub fn transformOBox(self: *const Self, obox: *const OBox) OBox {
+            return .{
+                .center = self.transformPoint(obox.center),
+                .halfExtent = obox.halfExtent * Vec.splat(self.scale),
+                .rotation = self.rotation.compose(obox.rotation),
+            };
+        }
+
+        pub fn isEqual(self: *const Self, rhs: *const Self, eps: T) bool {
             return std.math.approxEqAbs(T, self.scale, rhs.scale, eps)
                 and Vec.equal(self.position, rhs.position, eps)
                 and self.rotation.equal(rhs.rotation, eps);
@@ -143,8 +174,8 @@ pub fn TestTransform() !void {
     };
     const transInv = trans.inverse();
     const transInvCompose = trans.compose(&transInv);
-    try std.testing.expect(ident.equal(&transInvCompose, 1e-4));
-    try std.testing.expect(ident.equal(&transInv.compose(&trans), 1e-4));
+    try std.testing.expect(ident.isEqual(&transInvCompose, 1e-4));
+    try std.testing.expect(ident.isEqual(&transInv.compose(&trans), 1e-4));
 }
 
 test "Transform" {
@@ -157,10 +188,19 @@ pub fn Sphere(comptime N: u32, comptime T: type) type {
         radius: T = -1,
 
         pub const Vec = vm.Vec(N, T);
+        pub const BBox = Box(N, T);
         pub const Self = @This();
 
         pub fn isEmpty(self: *const Self) bool {
             return self.radius < 0;
+        }
+
+        pub fn getBox(self: *const Self) BBox {
+            const r = Vec.splat(self.radius);
+            return .{
+                .min = self.center - r,
+                .max = self.center + r,
+            };
         }
 
         pub fn anyPoint(self: *const Self) Vec.Simd {
@@ -178,11 +218,50 @@ pub fn Box(comptime N: u32, comptime T: type) type {
         min: Vec.Simd = Vec.splat(maxValue(T)),
         max: Vec.Simd = Vec.splat(minValue(T)),
 
+        pub const NumCorners: u32 = 1 << N;
         pub const Vec = vm.Vec(N, T);
         pub const Self = @This();
 
         pub fn isEmpty(self: *const Self) bool {
             return !Vec.all(self.min <= self.max);
+        }
+
+        pub fn size(self: *const Self) Vec.Simd {
+            return self.max - self.min;
+        }
+
+        pub fn center(self: *const Self) Vec.Simd {
+            return self.min + self.size() / 2;
+        }
+
+        pub fn getBox(self: *const Self) Self {
+            return self.*;
+        }
+
+        pub fn contains(self: *const Self, contained: *const Self) bool {
+            return Vec.all(self.min <= contained.min) and Vec.all(contained.max <= self.max);
+        }
+
+        pub fn intersects(self: *const Self, rhs: *const Self) bool {
+            return !getIntersection(self, rhs).isEmpty();
+        }
+
+        pub fn getIntersection(self: *const Self, rhs: *const Self) Self {
+            return .{
+                .min = @max(self.min, rhs.min),
+                .max = @min(self.max, rhs.max),
+            };
+        }
+
+        pub fn getUnion(self: *const Self, rhs: *const Self) Self {
+            if (self.isEmpty())
+                return rhs.*;
+            if (rhs.isEmpty())
+                return self.*;
+            return .{
+                .min = @min(self.min, rhs.min),
+                .max = @max(self.max, rhs.max),
+            };
         }
 
         pub fn anyPoint(self: *const Self) Vec.Simd {
@@ -191,6 +270,21 @@ pub fn Box(comptime N: u32, comptime T: type) type {
 
         pub fn support(self: *const Self, dir: Vec.Simd) Vec.Simd {
             return @select(T, dir > Vec.splat(0), self.min, self.max);
+        }
+
+        pub fn addPoint(self: *const Self, p: Vec.Simd) Self {
+            return .{
+                .min = @min(self.min, p),
+                .max = @max(self.max, p),
+            };
+        }
+
+        pub fn cornerSelector(cornerIdx: u32) Vec.BSimd {
+            std.debug.assert(cornerIdx < NumCorners);
+            var selector: Vec.BSimd = undefined;
+            inline for (0..N) |i|
+                selector[i] = (cornerIdx & (1<<i)) != 0;
+            return selector;
         }
     };
 }
@@ -203,10 +297,22 @@ pub fn OrientedBox(comptime N: u32, comptime T: type) type {
 
         pub const Vec = vm.Vec(N, T);
         pub const Rot = Rotation(N, T);
+        pub const BBox = Box(N, T);
         pub const Self = @This();
 
         pub fn isEmpty(self: *const Self) bool {
             return !Vec.all(self.halfExtent >= Vec.splat(0));
+        }
+
+        pub fn getBox(self: *const Self) BBox {
+            var box: BBox = .{};
+            for (0..BBox.NumCorners) |c| {
+                const selector = BBox.cornerSelector(@intCast(c));
+                const cornerMul = @select(T, selector, Vec.splat(1), Vec.splat(-1));
+                const rotCorner = self.rotation.rotateVec(self.halfExtent * cornerMul);
+                box = box.addPoint(self.center + rotCorner);
+            }
+            return box;
         }
 
         pub fn anyPoint(self: *const Self) Vec.Simd {
@@ -228,6 +334,7 @@ pub fn Convex(comptime N: u32, comptime T: type) type {
         vertexIncidence: [][]u32 = .{},
 
         pub const Vec = vm.Vec(N, T);
+        pub const BBox = Box(N, T);
         pub const Self = @This();
 
         pub fn init(self: *Self, verts: []Vec.Simd, triInds: []u32, alloc: std.mem.Allocator) !void {
@@ -283,6 +390,13 @@ pub fn Convex(comptime N: u32, comptime T: type) type {
             std.debug.assert((self.vertices.len != 0) == (self.triIndices.len != 0));
             std.debug.assert((self.vertexIncidence.count() != 0) == (std.vertices.len != 0));
             return self.vertices.len == 0;
+        }
+
+        pub fn getBox(self: *const Self) BBox {
+            var box: BBox = .{};
+            for (self.vertices) |v|
+                box = box.addPoint(v);
+            return box;
         }
 
         pub fn anyPoint(self: *const Self) Vec.Simd {

@@ -24,6 +24,7 @@ pub const BoolOp = enum {
 pub fn Vec(comptime N: u32, comptime T: type) type {
     return struct {
         pub const Simd = @Vector(N, T);
+        pub const BSimd = @Vector(N, bool);
         pub const Arr = [N]T;
         pub const Dim = N;
         pub const Elem = T;
@@ -48,11 +49,11 @@ pub fn Vec(comptime N: u32, comptime T: type) type {
             return v;
         }
 
-        pub fn all(v: Simd) bool {
+        pub fn all(v: BSimd) bool {
             return @reduce(.And, v);
         }
 
-        pub fn any(v: Simd) bool {
+        pub fn any(v: BSimd) bool {
             return @reduce(.Or, v);
         }
 
