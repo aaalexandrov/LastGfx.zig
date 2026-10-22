@@ -85,9 +85,9 @@ pub fn build(b: *std.Build) !void {
 
     // copy contents of data/ to the output dir
     b.installDirectory(.{
-        .install_dir = .prefix,
+        .install_dir = .bin,
         .source_dir = b.path("data"),
-        .install_subdir = "bin/data",
+        .install_subdir = "data",
     });
 
     // This declares intent for the executable to be installed into the
@@ -105,7 +105,7 @@ pub fn build(b: *std.Build) !void {
     // This is not necessary, however, if the application depends on other installed
     // files, this ensures they will be present and in the expected location.
     run_cmd.step.dependOn(b.getInstallStep());
-    run_cmd.setCwd(exe.getEmittedBinDirectory());
+    run_cmd.setCwd(.{ .relative = .{ .base = .install_bin } });
 
     // This allows the user to pass arguments to the application in the build
     // command itself, like this: `zig build run -- arg1 arg2 etc`
