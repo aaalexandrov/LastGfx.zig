@@ -5,20 +5,13 @@ const g = @import("geom.zig");
 pub fn SpatialTree(comptime N: u32, T: type, D: type) type {
     return struct {
         box: Box,
-        alloc: std.mem.Allocator,
         nodes: NodesMap,
-        nodeLevels: u32,
-
-        const Item = struct {
-            dataBox: Box,
-            data: Data,
-        };
+        nodeLevels: u6,
 
         const Node = struct {
-            data: DataArray = DataArray.empty,
+            data: Data = undefined,
             childMask: ChildMask = 0,
 
-            const DataArray = std.ArrayListUnmanaged(Item);
             const ChildMask = @Int(.unsigned, NodesPerLevel);
         };
 
@@ -29,28 +22,23 @@ pub fn SpatialTree(comptime N: u32, T: type, D: type) type {
         pub const NodesPerLevel: u32 = 1 << N;
         pub const Self = @This();
 
-        pub fn init(box_: *const Box, maxLevels: u32, alloc_: std.mem.Allocator) !Self {
+        pub fn init(box_: *const Box, maxLevels: u6) Self {
             return .{
                 .box = box_.*,
-                .alloc = alloc_,
                 .nodes = NodesMap.empty,
                 .nodeLevels = maxLevels,
             };
         }
 
-        pub fn deinit(self: *Self) void {
-            self.clear();
+        pub fn clear(self: *Self, alloc: std.mem.Allocator) void {
+            self.nodes.clearAndFree(alloc);
         }
 
-        pub fn clear(self: *Self) void {
-            self.nodes.clearAndFree(self.alloc);
-        }
-
-        fn nodeIndex(self: *const Self, nodeBox: *const Box) u32 {
+        fn nodeIndexAndBox(self: *const Self, nodeBox: *const Box) struct { u32, Box } {
             std.debug.assert(!nodeBox.isEmpty());
             var curBox = self.box;
             var index: u32 = 1;
-            var level: u32 = 0;
+            var level: u6 = 0;
             lvl: while (level < self.nodeLevels) : (level += 1) {
                 std.debug.assert(curBox.contains(nodeBox));
                 const curCenter = curBox.center();
@@ -66,8 +54,9 @@ pub fn SpatialTree(comptime N: u32, T: type, D: type) type {
                         break :lvl;
                 }
                 index = (index << N) | childIdx;
+                curBox = childBox;
             }
-            return index;
+            return .{index, curBox};
         }
 
         fn nodeBoxFromIndex(self: *const Self, nodeIdx: u32) Box {
@@ -96,103 +85,204 @@ pub fn SpatialTree(comptime N: u32, T: type, D: type) type {
             return curBox;
         }
 
-        pub fn addData(self: *Self, dataBox: *const Box, data: Data) !void {
-            var nodeInd = self.nodeIndex(dataBox);
-            var entry = try self.nodes.getOrPut(self.allocator, nodeInd);
+        pub const NodeData = struct {
+            node: *Node,
+            box: Box,
+        };
+
+        pub fn getNode(self: *const Self, dataBox: *const Box) ?NodeData {
+            const nodeInd, const nodeBox = self.nodeIndexAndBox(dataBox);
+            return .{
+                .node = self.nodes.get(nodeInd) orelse return null,
+                .box = nodeBox,
+            };
+        }
+
+        pub fn getOrAddNode(self: Self, dataBox: *const Box, initData: *const Data, alloc: std.mem.Allocator) !NodeData {
+            const nodeInd, const nodeBox = self.nodeIndexAndBox(dataBox);
+            std.debug.assert(nodeInd > 0);
+            var entry = try self.nodes.getOrPut(alloc, nodeInd);
             const node = entry.value_ptr;
-            var childBit: Node.ChildMask = 0;
-            while (nodeInd != 0 and !entry.found_existing) {
-                entry.value_ptr.* = .{.childMask = childBit};
-                const childInd = (nodeInd - 1) % NodesPerLevel;
-                childBit = 1 << childInd;
-                nodeInd = (nodeInd - 1) / NodesPerLevel;
-                entry = try self.nodes.getOrPut(self.allocator, nodeInd);
-            }
-            try node.data.append(self.alloc, .{
-                .dataBox = dataBox,
-                .data = data,
-            });
-        }
+            var parentInd = nodeInd;
+            var childMask: Node.ChildMask = 0;
+            while (!entry.found_existing) {
+                entry.value_ptr.data = initData.*;
+                entry.value_ptr.childMask = childMask;
 
-        pub fn findData(self: *const Self, dataBox: *const Box, data: Data) ?struct { node: *Node, dataIdx: u32 } {
-            const nodeInd = self.nodeIndex(dataBox);
-            const node = if (self.nodes.getPtr(nodeInd)) |n| n else return null;
-            for (node.data.items, 0..) |*item, i| {
-                if (item.dataBox == dataBox.* and item.data == data)
-                    return .{.node = node, .dataIdx = @intCast(i)};
+                childMask = 1 << (parentInd & (NodesPerLevel - 1));
+                parentInd >>= N;
+                if (parentInd == 0)
+                    break;
+                entry = try self.nodes.getOrPut(alloc, parentInd);
             }
-            return null;
-        }
-
-        pub fn removeData(self: *Self, dataBox: *const Box, data: Data) void {
-            if (self.findData(dataBox, data)) |found| {
-                found.node.data.swapRemove(found.dataIdx);
-            }
-        }
+            return .{
+                .node = node,
+                .box = nodeBox,
+            };
+        }   
 
         pub fn iterator(self: *const Self) Iterator {
             return .{
                 .spatial = self,
-                .box = self.box,
-                .nodeIdx = 1,
-                .itemIdx = null,
-                .childIdx = 0,
             };
         }
 
         pub const Iterator = struct {
             spatial: *const Self,
-            box: Box,
-            nodeIdx: u32,
-            itemIdx: ?u32,
-            childIdx: u32,
+            nodeIdx: u32 = 1,
 
-            pub fn next(self: *const Iterator) ?struct { box: *const Box, data: ?Data } {
+            pub fn next(self: *const Iterator) ?NodeData {
                 const node = self.spatial.nodes.getPtr(self.nodeIdx) orelse return null;
-                const curBox = self.box;
-                var data: ?*const Data = null;
-                if (self.itemIdx) |itemIndex| {
-                    const item = &node.data.items[itemIndex];
-                    curBox = item.dataBox;
-                    data = item.data;
-                }
-                self.advanceItem(node);
-                return .{.box = curBox, .data = data};
+                const nodeIdx = self.nodeIdx;
+                self.advanceNode(node);
+                return .{
+                    .node = node,
+                    .box = self.spatial.nodeBoxFromIndex(nodeIdx),
+                };
             }
 
             pub fn skipNodeAndChildren(self: *const Iterator) void {
                 const node = self.spatial.nodes.getPtr(self.nodeIdx).?;
-                self.childIdx = NodesPerLevel;
-                self.advanceNode(node);
+                self. advanceNextSibling(node);
             }
 
-            fn advanceItem(self: *const Iterator, node: *const Node) void {
-                if (self.itemIdx == null)
-                    self.itemIdx = 0
-                else
-                    self.itemIdx += 1;
-                if (self.itemIdx >= node.data.items.len)
-                    advanceNode(self, node);
-            }
-
-            fn advanceNode(self: *const Iterator, node: *const Node) void {
-                self.itemIdx = null;
-                while (self.childIdx < NodesPerLevel) {
-                    if ((node.childMask & (1 << self.childIdx)) != 0) {
-                        // descend to a valid child
-                        self.nodeIdx = (self.nodeIdx << N) | self.childIdx;
-                        self.box = getChildBox(self.box, self.childIdx);
-                        self.childIdx = 0;
-                        return;
-                    }
-                    self.childIdx += 1;
+            fn advanceNode(self: *Iterator, node: *Node) void {
+                if (node.childMask != 0) {
+                    // descend to the first child if there exists one
+                    const firstChildIdx = @ctz(node.childMask);
+                    self.nodeIdx = (self.nodeIdx << N) | firstChildIdx;
+                } else {
+                    self.advanceNextSibling(node);
                 }
-                // go up to the parent
-                // if we're already a the root (index 1), we'll go to index 0 which does not exist so nextBox() will return null on the next call
-                self.childIdx = self.nodeIdx & (NodesPerLevel - 1);
-                self.nodeIdx = self.nodeIdx >> N;
-                self.box = self.nodeBoxFromIndex(self.nodeIdx);
+            }
+
+            fn advanceNextSibling(self: *Iterator, node: *Node) void {
+                // go up until we find a node with unvisited children
+                var curNode = node;
+                while (true) {
+                    var childIdx = self.nodeIdx & (NodesPerLevel - 1);
+                    self.nodeIdx >>= N;
+                    curNode = self.spatial.nodes.getPtr(self.nodeIdx) orelse return;
+                    while (true) {
+                        childIdx += 1;
+                        if (childIdx >= N)
+                            break;
+                        if ((curNode.childMask & (1 << childIdx)) != 0) {
+                            self.nodeIdx = (self.nodeIdx << N) | childIdx;
+                            return;
+                        }
+                    }
+                }
             }
         };
+    };
+}
+
+pub fn GeomPtr(comptime N: u32, comptime T: type) type {
+    return union(enum) {
+        box: *Box,
+        obox: *OBox,
+        sphere: *Sphere,
+        convex: *Convex,
+
+        pub const Vec = vm.Vec(N, T);
+        pub const Box = g.Box(N, T);
+        pub const OBox = g.OrientedBox(N, T);
+        pub const Sphere = g.Sphere(N, T);
+        pub const Convex = g.Convex(N, T);
+        pub const GJK = g.GJK(N, T);
+        pub const Self = @This();
+
+        pub fn getPtr(comptime G: type, geom: *G) Self {
+            return switch (G) {
+                Box => .{.box = geom},
+                OBox => .{.obox = geom},
+                Sphere => .{.sphere = geom},
+                Convex => .{.convex = geom},
+                else => unreachable
+            };
+        }
+
+        pub fn getBox(self: Self) Box {
+            return switch (self) {
+                inline else => |geom| geom.getBox(),
+            };
+        }
+
+        pub fn intersects(self: Self, rhs: Self) bool {
+            return switch (self) {
+                .box => |box_| switch (rhs) {
+                    .box => |rhsBox| box_.intersects(rhsBox),
+                    inline else => |rhsGeom| GJK.distance(Box, box_, @TypeOf(rhsGeom.*), rhsGeom) <= Vec.Eps,
+                },
+                else => |geom| switch (rhs) {
+                    inline else => |rhsGeom| GJK.distance(@TypeOf(geom.*), geom, @TypeOf(rhsGeom.*), rhsGeom) <= Vec.Eps,
+                }
+            };
+        }
+    };
+}
+
+pub fn GeomTree(comptime N: u32, comptime T: type) type {
+    return struct {
+        spatial: Spatial,
+        alloc: std.mem.Allocator,
+
+        pub const Vec = vm.Vec(N, T);
+        pub const Box = g.Box(N, T);
+        pub const GeomP = GeomPtr(N, T);
+        pub const GeomArr = std.ArrayListUnmanaged(GeomP);
+        pub const Spatial = SpatialTree(N, T, GeomArr);
+        pub const Self = @This();
+
+        pub fn init(box: *const Box, maxLevels: u6, alloc_: std.mem.Allocator) Self {
+            return .{
+                .spatial = Spatial.init(box, maxLevels),
+                .alloc = alloc_,
+            };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.spatial.clear(self.alloc);
+        }
+
+        pub fn addGeom(self: *Self, geom: GeomP) !void {
+            const geomBox = geom.getBox();
+            const nodeData = try self.spatial.getOrAddNode(geomBox, &GeomArr.empty, self.alloc);
+            std.debug.assert(std.mem.find(GeomP, nodeData.node.data.items, .{geom}) == null);
+            try nodeData.node.data.append(self.alloc, geom);
+        }
+
+        pub fn removeGeom(self: *Self, geom: GeomP) void {
+            const geomBox = geom.getBox();
+            const nodeData = try self.spatial.getNode(geomBox) orelse return;
+            const geomIdx = std.mem.find(GeomP, nodeData.node.data.items, .{geom}) orelse return;
+            _ = nodeData.node.data.swapRemove(geomIdx);
+        }
+
+        pub const GeomCallback = fn (context: anyopaque, geom: GeomP) void;
+        pub fn forAllGeom(self: *const Self, context: anyopaque, callback: GeomCallback) void {
+            var itNodes = self.spatial.iterator();
+            while (itNodes.next()) |nodeData| {
+                for (nodeData.node.data.items) |nodeGeom| {
+                    callback(context, nodeGeom);
+                }
+            }
+        }
+
+        pub fn forIntersectingGeom(self: *const Self, geom: GeomP, context: anyopaque, callback: GeomCallback) void {
+            var itNodes = self.spatial.iterator();
+            while (itNodes.next()) |nodeData| {
+                const nodeBoxPtr = GeomP.getPtr(Box, &nodeData.box);
+                if (!geom.intersects(nodeBoxPtr)) {
+                    itNodes.skipNodeAndChildren();
+                    continue;
+                }
+                for (nodeData.node.data.items) |nodeGeom| {
+                    if (geom.intersects(nodeGeom))
+                        callback(context, nodeGeom);
+                }
+            }
+        }
     };
 }
