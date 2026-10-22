@@ -30,22 +30,22 @@ pub const NamedMetadata = struct {
     }
 
     pub fn addDeinitMethod(self: *Self, fnDeinit: anytype, registry: *TypeRegistry) !void {
-        const deinitParams = @typeInfo(@TypeOf(fnDeinit)).@"fn".params;
-        //const T: type = @typeInfo(deinitParams[0].type.?).pointer.child;
+        const deinitParamTypes = @typeInfo(@TypeOf(fnDeinit)).@"fn".param_types;
+        //const T: type = @typeInfo(deinitParamTypes[0].?).pointer.child;
 
         const deiniterT = struct {
             fn deinitSelf(ptr: [*]u8, _: *TypeRegistry) void {
-                return fnDeinit(@alignCast(@ptrCast(ptr)));
+                return fnDeinit(@ptrCast(@alignCast(ptr)));
             }
             fn deinitSelfAlloc(ptr: [*]u8, registry_: *TypeRegistry) void {
-                return fnDeinit(@alignCast(@ptrCast(ptr)), registry_.alloc);
+                return fnDeinit(@ptrCast(@alignCast(ptr)), registry_.alloc);
             }
         };
 
-        const deinitMethod: TypeInfo.DeinitFn = if (comptime deinitParams.len == 1)
-                deiniterT.deinitSelf
-            else if (comptime deinitParams.len == 2)
-                deiniterT.deinitSelfAlloc;
+        const deinitMethod: TypeInfo.DeinitFn = if (comptime deinitParamTypes.len == 1)
+            deiniterT.deinitSelf
+        else if (comptime deinitParamTypes.len == 2)
+            deiniterT.deinitSelfAlloc;
         _ = try self.addT(TypeInfo.DeinitFn, TypeInfo.DeinitFnName, &deinitMethod, registry);
     }
 
@@ -61,9 +61,9 @@ pub const NamedMetadata = struct {
     pub fn get(self: *const Self, name: []const u8) ?AnyPtr {
         const entry = self.map.getEntry(name);
         return if (entry) |ent|
-                ent.value_ptr.*.ptr()
-            else
-                null;
+            ent.value_ptr.*.ptr()
+        else
+            null;
     }
 };
 
@@ -148,12 +148,12 @@ pub const TypeInfo = struct {
                 .elementType = try registry.get(arr.child),
             } },
             .@"struct" => |str| blk: {
-                var members = try registry.alloc.alloc(Member, str.fields.len);
-                inline for (0..str.fields.len) |i| {
+                var members = try registry.alloc.alloc(Member, str.field_names.len);
+                inline for (0..str.field_names.len) |i| {
                     members[i] = .{
-                        .name = try registry.alloc.dupe(u8, str.fields[i].name),
-                        .offset = @offsetOf(T, str.fields[i].name),
-                        .typeInfo = try registry.get(str.fields[i].type),
+                        .name = try registry.alloc.dupe(u8, str.field_names[i]),
+                        .offset = @offsetOf(T, str.field_names[i]),
+                        .typeInfo = try registry.get(str.field_types[i]),
                         .metadata = .{},
                     };
                 }
@@ -163,14 +163,14 @@ pub const TypeInfo = struct {
                 .pointedType = try registry.get(ptr.child),
             } },
             .@"fn" => |func| blk: {
-                var params = try registry.alloc.alloc(*const TypeInfo, func.params.len);
-                inline for (0..func.params.len) |i| {
-                    params[i] = try registry.get(func.params[i].type.?);
+                var params = try registry.alloc.alloc(*const TypeInfo, func.param_types.len);
+                inline for (0..func.param_types.len) |i| {
+                    params[i] = try registry.get(func.param_types[i].?);
                 }
-                break :blk .{.Fn = .{
-                    .returnType = try registry.get(func.return_type.?), 
+                break :blk .{ .Fn = .{
+                    .returnType = try registry.get(func.return_type.?),
                     .paramTypes = params,
-                }};
+                } };
             },
             else => .Basic,
         };
@@ -198,7 +198,7 @@ pub const TypeInfo = struct {
         const maxDepth = 16;
         if (depth > maxDepth)
             return;
-        const whitespace = (" " ** (2 * (maxDepth + 1)));
+        const whitespace: [2 * (maxDepth + 1)]u8 = @splat(' ');
         std.log.info("{s}Type {s}, size: {}, align: {}, kind: {s}", .{ whitespace[0 .. depth * 2], self.name, self.size, self.alignment, @tagName(self.info) });
         switch (self.info) {
             .Array => |arr| {
@@ -215,9 +215,9 @@ pub const TypeInfo = struct {
                 }
             },
             .Fn => |func| {
-                std.log.info("{s}return type: ", .{ whitespace[0 .. (depth + 1) * 2] });
+                std.log.info("{s}return type: ", .{whitespace[0 .. (depth + 1) * 2]});
                 func.returnType.dump(depth + 2);
-                std.log.info("{s}param types: ", .{ whitespace[0 .. (depth + 1) * 2] });
+                std.log.info("{s}param types: ", .{whitespace[0 .. (depth + 1) * 2]});
                 for (func.paramTypes) |paramType| {
                     paramType.dump(depth + 2);
                 }
@@ -368,7 +368,7 @@ pub const AnyPtr = struct {
 };
 
 pub fn AnyValue(comptime size: usize, comptime alignment: usize) type {
-    comptime if (size < @sizeOf([*]u8)) 
+    comptime if (size < @sizeOf([*]u8))
         unreachable;
     comptime if (alignment < @alignOf([*]u8))
         unreachable;
@@ -380,17 +380,13 @@ pub fn AnyValue(comptime size: usize, comptime alignment: usize) type {
         pub const Alignment = alignment;
         pub const Self = @This();
 
-        pub fn init(self: *Self, typeInfo: *const TypeInfo, alloc: std.mem.Allocator, value: ?[*] const u8) !void {
+        pub fn init(self: *Self, typeInfo: *const TypeInfo, alloc: std.mem.Allocator, value: ?[*]const u8) !void {
             self.typeInfo = typeInfo;
             const val: [*]u8 = if (self.inPlace())
                 @ptrCast(&self.value)
             else blk: {
                 const valuePtr: *[*]u8 align(alignment) = @ptrCast(&self.value);
-                valuePtr.* = alloc.rawAlloc(
-                    typeInfo.size, 
-                    std.mem.Alignment.fromByteUnits(typeInfo.alignment), 
-                    @returnAddress()
-                ).?;
+                valuePtr.* = alloc.rawAlloc(typeInfo.size, std.mem.Alignment.fromByteUnits(typeInfo.alignment), @returnAddress()).?;
                 break :blk valuePtr.*;
             };
             if (value) |v|
@@ -406,22 +402,15 @@ pub fn AnyValue(comptime size: usize, comptime alignment: usize) type {
             _ = anyPtr.deinitValue(registry);
             if (!self.inPlace()) {
                 const valuePtr: *[*]u8 = @ptrCast(&self.value);
-                registry.alloc.rawFree(
-                    valuePtr.*[0..self.typeInfo.size], 
-                    std.mem.Alignment.fromByteUnits(self.typeInfo.alignment), 
-                    @returnAddress()
-                );
+                registry.alloc.rawFree(valuePtr.*[0..self.typeInfo.size], std.mem.Alignment.fromByteUnits(self.typeInfo.alignment), @returnAddress());
             }
         }
 
         pub fn ptr(self: *const Self) AnyPtr {
-            return AnyPtr.init(
-                self.typeInfo,
-                if (self.inPlace()) 
-                        @constCast(@ptrCast(&self.value))
-                    else 
-                        @as(*[*]u8, @constCast(@ptrCast(&self.value))).*
-            );
+            return AnyPtr.init(self.typeInfo, if (self.inPlace())
+                @ptrCast(@constCast(&self.value))
+            else
+                @as(*[*]u8, @ptrCast(@constCast(&self.value))).*);
         }
 
         fn inPlace(self: *const Self) bool {

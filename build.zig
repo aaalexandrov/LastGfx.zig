@@ -105,13 +105,11 @@ pub fn build(b: *std.Build) !void {
     // This is not necessary, however, if the application depends on other installed
     // files, this ensures they will be present and in the expected location.
     run_cmd.step.dependOn(b.getInstallStep());
-    run_cmd.setCwd(.{ .cwd_relative = b.exe_dir });
+    run_cmd.setCwd(exe.getEmittedBinDirectory());
 
     // This allows the user to pass arguments to the application in the build
     // command itself, like this: `zig build run -- arg1 arg2 etc`
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    run_cmd.addPassthruArgs();
 
     // This creates a build step. It will be visible in the `zig build --help` menu,
     // and can be selected like this: `zig build run`

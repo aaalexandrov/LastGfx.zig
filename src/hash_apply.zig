@@ -78,10 +78,10 @@ pub fn hash(hasher: anytype, key: anytype, comptime strat: std.hash.Strategy, co
         },
 
         .@"struct" => |info| {
-            inline for (info.fields) |field| {
+            inline for (info.field_names) |fieldName| {
                 // We reuse the hash of the previous field as the seed for the
                 // next one so that they're dependant.
-                hash(hasher, @field(key, field.name), strat, leafHash);
+                hash(hasher, @field(key, fieldName), strat, leafHash);
             }
         },
 
@@ -89,10 +89,10 @@ pub fn hash(hasher: anytype, key: anytype, comptime strat: std.hash.Strategy, co
             if (info.tag_type) |tag_type| {
                 const tag = std.meta.activeTag(key);
                 hash(hasher, tag, strat, leafHash);
-                inline for (info.fields) |field| {
-                    if (@field(tag_type, field.name) == tag) {
-                        if (field.type != void) {
-                            hash(hasher, @field(key, field.name), strat, leafHash);
+                inline for (info.field_names, info.field_types) |fieldName, fieldType| {
+                    if (@field(tag_type, fieldName) == tag) {
+                        if (fieldType != void) {
+                            hash(hasher, @field(key, fieldName), strat, leafHash);
                         }
                         break :blk;
                     }
@@ -126,9 +126,8 @@ pub fn getHashApplyStratFn(comptime K: type, comptime Context: type, comptime st
 
 pub fn hashFloat(hasher: anytype, key: anytype, comptime strat: std.hash.Strategy, comptime leafHash: LeafHash) void {
     const Key = @TypeOf(key);
-    switch (@typeInfo(Key)) {    
-        .float => |float| 
-            leafHash(hasher, @as(@Int(.unsigned, float.bits), @bitCast(key)), strat),
+    switch (@typeInfo(Key)) {
+        .float => |float| leafHash(hasher, @as(@Int(.unsigned, float.bits), @bitCast(key)), strat),
         else => leafHash(hasher, key, strat),
     }
 }
